@@ -1,5 +1,3 @@
-from dotenv import load_dotenv
-load_dotenv() # This loads the .env file
 import os
 import io
 import uvicorn
@@ -11,12 +9,22 @@ from googleapiclient.http import MediaIoBaseUpload
 import firebase_admin
 from firebase_admin import credentials, firestore
 import PyPDF2
-
-# 🆕 IMPORT THE NEW AI LIBRARY
 from google import genai
+from dotenv import load_dotenv
 
+# --- 1. CONFIGURATION (LOAD KEYS FIRST) ---
 
-# 🆕 CONFIGURE THE NEW AI CLIENT
+# Load environment variables from .env file
+load_dotenv()
+
+GOOGLE_DRIVE_FOLDER_ID = os.getenv("GOOGLE_DRIVE_FOLDER_ID")
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
+
+# Check if keys exist
+if not GEMINI_API_KEY or not GOOGLE_DRIVE_FOLDER_ID:
+    raise ValueError("❌ Missing Keys! Make sure the .env file exists and contains GEMINI_API_KEY and GOOGLE_DRIVE_FOLDER_ID.")
+
+# Configure AI Client (After loading key)
 ai_client = genai.Client(api_key=GEMINI_API_KEY)
 
 # Service Account Scopes
@@ -56,7 +64,7 @@ def extract_text_from_pdf(file_bytes):
         return ""
 
 # --- 4. APP API ---
-app = FastAPI(title="OpenNotes AI Backend (Final)")
+app = FastAPI(title="OpenNotes AI Backend")
 
 app.add_middleware(
     CORSMiddleware,
@@ -91,9 +99,10 @@ async def upload_file(file: UploadFile = File(...), topic_id: str = "general"):
             "uploaded_at": firestore.SERVER_TIMESTAMP
         })
         
-        return {"status": "success", "view_link": drive_file.get('webViewLink')}
+        return {"status": "success", "view_link": drive_file.get('webViewLink'), "filename": file.filename}
 
     except Exception as e:
+        print(f"❌ Upload Error: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 # --- CHAT ENDPOINT ---
@@ -131,7 +140,7 @@ async def chat_with_notes(
         {question}
         """
 
-        # 4. Ask Gemini (NEW SYNTAX)
+        # 4. Ask Gemini (Using the Free-Tier Friendly Model)
         response = ai_client.models.generate_content(
             model='gemini-flash-latest',
             contents=prompt
