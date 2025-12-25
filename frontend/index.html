@@ -1,1 +1,70 @@
- 
+ <!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>OpenNotes AI - Login</title>
+    <style>
+        body { font-family: sans-serif; display: flex; justify-content: center; align-items: center; height: 100vh; background-color: #f0f2f5; }
+        .container { text-align: center; background: white; padding: 2rem; border-radius: 10px; box-shadow: 0 4px 6px rgba(0,0,0,0.1); }
+        button { background-color: #4285F4; color: white; border: none; padding: 10px 20px; border-radius: 5px; cursor: pointer; font-size: 16px; margin-top: 10px; }
+        button:hover { background-color: #357ae8; }
+        #userInfo { margin-top: 20px; color: green; font-weight: bold; }
+    </style>
+</head>
+<body>
+
+    <div class="container">
+        <h1>Welcome to OpenNotes AI</h1>
+        <p>Login to access your smart notes</p>
+        <button id="loginBtn">Sign in with Google</button>
+        <div id="userInfo"></div>
+    </div>
+
+    <script type="module">
+        // Import the functions you need from the SDKs you need
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-app.js";
+        import { getAuth, signInWithPopup, GoogleAuthProvider } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-auth.js";
+
+        // TODO: Replace the following with your app's Firebase project configuration
+        // PASTE YOUR FIREBASE CONFIG HERE 👇
+        const firebaseConfig = {
+           apiKey: "AIzaSyBxFeqOox4sXp-HIaJ9IQeTa5nd-aAyyx4",
+           authDomain: "opennotes-ai.firebaseapp.com",
+           projectId: "opennotes-ai",
+           storageBucket: "opennotes-ai.firebasestorage.app",
+           messagingSenderId: "962984182326",
+           appId: "1:962984182326:web:192680a7404eefd4e64e97",
+           measurementId: "G-04CCLQVJ8E"
+        };
+        // 👆 END PASTE
+
+        // Initialize Firebase
+        const app = initializeApp(firebaseConfig);
+        const auth = getAuth(app);
+        const provider = new GoogleAuthProvider();
+
+        // Login Logic
+        const loginBtn = document.getElementById('loginBtn');
+        const userInfo = document.getElementById('userInfo');
+
+        loginBtn.addEventListener('click', () => {
+            signInWithPopup(auth, provider)
+                .then((result) => {
+                    // This gives you a Google Access Token.
+                    const user = result.user;
+                    console.log("User Info:", user);
+                    
+                    // Display success message
+                    userInfo.innerText = `Success! Hello, ${user.displayName}`;
+                    
+                    // TODO: In Phase 2, we will send user.uid to our Python backend
+                }).catch((error) => {
+                    console.error("Error:", error);
+                    userInfo.innerText = `Error: ${error.message}`;
+                    userInfo.style.color = 'red';
+                });
+        });
+    </script>
+</body>
+</html>

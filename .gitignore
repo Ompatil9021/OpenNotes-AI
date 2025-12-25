@@ -1,0 +1,17 @@
+# Python System Files
+__pycache__/
+*.py[cod]
+
+# Virtual Environment (Don't upload 5,000 library files)
+venv/
+backend/venv/
+
+# ⚠️ SECRETS (NEVER UPLOAD THESE)
+*.json
+backend/serviceAccountKey.json
+backend/credentials.json
+backend/token.json
+.env
+
+# MacOS junk (optional)
+.DS_Store
