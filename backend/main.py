@@ -1,8 +1,10 @@
 import os
 import io
 import uvicorn
-from fastapi import FastAPI, UploadFile, File, HTTPException, Body
+import uuid
+from fastapi import FastAPI, UploadFile, File, Form, HTTPException, Body
 from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel  # <--- THIS WAS MISSING
 from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaIoBaseUpload
@@ -49,6 +51,8 @@ def get_drive_service():
         raise Exception("❌ token.json not found. Run setup_drive.py first.")
     creds = Credentials.from_authorized_user_file('token.json', SCOPES)
     return build('drive', 'v3', credentials=creds)
+    # Initialize the global variable so the upload function can use it
+drive_service = get_drive_service()
 
 # --- 3. HELPER FUNCTIONS ---
 
@@ -74,37 +78,62 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# --- 5. UPDATED UPLOAD ENDPOINT ---
 @app.post("/upload")
-async def upload_file(file: UploadFile = File(...), topic_id: str = "general"):
+async def upload_note(
+    file: UploadFile = File(...),
+    title: str = Form(...),
+    subject: str = Form(...),
+    chapter: str = Form(None),
+    description: str = Form(None),
+    youtube_url: str = Form(None),
+    uploader_id: str = Form(...)
+):
     try:
+        # 1. Create a safe filename
+        safe_filename = f"{uuid.uuid4()}_{file.filename}"
+        
+        # 2. Upload to Google Drive
         file_content = await file.read()
+        # Create a temp file to upload
+        with open(safe_filename, "wb") as f:
+            f.write(file_content)
+            
+        g_file = drive_service.files().create(
+            body={'name': safe_filename, 'parents': [GOOGLE_DRIVE_FOLDER_ID]},
+            media_body=MediaIoBaseUpload(io.BytesIO(file_content), mimetype='application/pdf'),
+            fields='id, webViewLink'
+        ).execute()
         
-        # Drive Upload
-        service = get_drive_service()
-        file_metadata = {'name': file.filename, 'parents': [GOOGLE_DRIVE_FOLDER_ID]}
-        media = MediaIoBaseUpload(io.BytesIO(file_content), mimetype=file.content_type, resumable=True)
-        drive_file = service.files().create(body=file_metadata, media_body=media, fields='id, name, webViewLink').execute()
+        # Clean up temp file
+        os.remove(safe_filename)
         
-        # Text Extraction
-        extracted_text = ""
-        if file.filename.endswith(".pdf"):
-            extracted_text = extract_text_from_pdf(file_content)
+        # 3. Make Public (Viewer)
+        drive_service.permissions().create(
+            fileId=g_file.get('id'),
+            body={'type': 'anyone', 'role': 'reader'}
+        ).execute()
+
+        # 4. Save to Firestore (MARKED AS PENDING)
+        note_data = {
+            "title": title,
+            "subject": subject,
+            "chapter": chapter or "",
+            "description": description or "",
+            "youtube_url": youtube_url or "",
+            "fileUrl": g_file.get('webViewLink'),
+            "driveId": g_file.get('id'),
+            "uploader_id": uploader_id,
+            "is_approved": False,  # 🔒 LOCK IT BY DEFAULT
+            "created_at": firestore.SERVER_TIMESTAMP
+        }
         
-        # Save to DB
-        db.collection("topics").document(topic_id).collection("files").add({
-            "filename": file.filename,
-            "drive_file_id": drive_file.get('id'),
-            "view_link": drive_file.get('webViewLink'),
-            "processed_text": extracted_text[:100000], 
-            "uploaded_at": firestore.SERVER_TIMESTAMP
-        })
-        
-        return {"status": "success", "view_link": drive_file.get('webViewLink'), "filename": file.filename}
+        db.collection("notes").add(note_data)
+
+        return {"status": "success", "message": "Note uploaded successfully! Waiting for approval."}
 
     except Exception as e:
-        print(f"❌ Upload Error: {e}")
         raise HTTPException(status_code=500, detail=str(e))
-
 # --- CHAT ENDPOINT ---
 @app.post("/chat")
 async def chat_with_notes(
@@ -115,8 +144,16 @@ async def chat_with_notes(
         print(f"🤖 User asked: {question} (Topic: {topic_id})")
 
         # 1. Fetch notes
-        notes_ref = db.collection("topics").document(topic_id).collection("files")
-        docs = notes_ref.stream()
+        # NEW WAY: Query the main 'notes' collection by Subject
+        # If topic_id is "general" or empty, we fetch everything (optional logic)
+        notes_ref = db.collection("notes")
+        
+        # If the frontend sends a specific subject (e.g., "Computer Science"), filter by it
+        if topic_id and topic_id != "general":
+            query = notes_ref.where("subject", "==", topic_id)
+            docs = query.stream()
+        else:
+            docs = notes_ref.stream()
         
         # 2. Combine text
         context_text = ""
@@ -151,6 +188,122 @@ async def chat_with_notes(
 
     except Exception as e:
         print(f"❌ Chat Error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+    
+# --- 6. USER DASHBOARD ENDPOINTS ---
+
+# Get notes uploaded by a specific user
+@app.get("/my-notes/{user_id}")
+async def get_user_notes(user_id: str):
+    try:
+        # Query Firestore: Get notes where uploader_id matches
+        notes_ref = db.collection("notes")
+        query = notes_ref.where("uploader_id", "==", user_id)
+        docs = query.stream()
+
+        my_notes = []
+        for doc in docs:
+            note = doc.to_dict()
+            note['id'] = doc.id # Add the ID so we can delete it later
+            my_notes.append(note)
+
+        return my_notes
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+# Delete a note
+@app.delete("/notes/{note_id}")
+async def delete_note(note_id: str):
+    try:
+        # 1. Delete from Firestore
+        db.collection("notes").document(note_id).delete()
+        
+        # (Optional: In a real app, you would also delete the file from Google Drive here)
+        
+        return {"status": "success", "message": "Note deleted"}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))    
+
+# --- 7. ADMIN ENDPOINTS (FIXED) ---
+
+@app.get("/admin/stats")
+async def get_admin_stats():
+    try:
+        # 1. Fetch the stream ONCE
+        notes_stream = db.collection("notes").stream()
+        
+        # 2. Build the list immediately
+        all_notes_data = []
+        for doc in notes_stream:
+            note = doc.to_dict()
+            note['id'] = doc.id  # Attach the ID
+            all_notes_data.append(note)
+            
+        # 3. Return the pre-built list
+        return {
+            "total_notes": len(all_notes_data),
+            "all_notes": all_notes_data
+        }
+    except Exception as e:
+        print(f"Admin Stats Error: {e}") # Print error to console for debugging
+        raise HTTPException(status_code=500, detail=str(e))
+
+# --- 8. DYNAMIC SUBJECTS & APPROVALS ---
+
+class SubjectRequest(BaseModel):
+    title: str
+    field: str  # e.g., "Engineering", "Pharmacy"
+    description: str
+    uploader_id: str
+
+@app.post("/request-subject")
+async def request_subject(request: SubjectRequest):
+    try:
+        # Check if exists (optional logic could go here)
+        new_subject = {
+            "title": request.title,
+            "field": request.field,
+            "description": request.description,
+            "icon": "📚", # Default icon
+            "chapters": [], # Empty list of chapters
+            "is_approved": False, # 🔒 Pending Admin Approval
+            "uploader_id": request.uploader_id,
+            "created_at": firestore.SERVER_TIMESTAMP
+        }
+        db.collection("subjects").add(new_subject)
+        return {"status": "success", "message": "Subject requested! Waiting for Admin approval."}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/subjects")
+async def get_subjects(show_all: bool = False):
+    try:
+        subjects_ref = db.collection("subjects")
+        
+        # If not admin (show_all=False), only show APPROVED subjects
+        if not show_all:
+            query = subjects_ref.where("is_approved", "==", True)
+            docs = query.stream()
+        else:
+            # Admin sees everything (pending + approved)
+            docs = subjects_ref.stream()
+
+        result = []
+        for doc in docs:
+            sub = doc.to_dict()
+            sub['id'] = doc.id
+            result.append(sub)
+        return result
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.put("/approve/{collection_name}/{item_id}")
+async def approve_item(collection_name: str, item_id: str):
+    try:
+        # Generic approver for both 'notes' and 'subjects'
+        db.collection(collection_name).document(item_id).update({"is_approved": True})
+        return {"status": "success", "message": "Item Approved!"}
+    except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
 if __name__ == "__main__":

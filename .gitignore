@@ -1,17 +1,30 @@
-# Python System Files
+# --- 🐍 Python Backend ---
 __pycache__/
 *.py[cod]
-
-# Virtual Environment (Don't upload 5,000 library files)
-venv/
 backend/venv/
+venv/
+*.log
 
-# ⚠️ SECRETS (NEVER UPLOAD THESE)
-*.json
+# --- ⚛️ Frontend (React/Vite) ---
+frontend/node_modules/
+frontend/dist/
+frontend/.env
+frontend/.env.local
+
+# --- 🔒 SECRETS (CRITICAL - DO NOT TOUCH) ---
+# Ignore environment variables
+.env
+backend/.env
+
+# Ignore Firebase & Google Drive Keys
 backend/serviceAccountKey.json
 backend/credentials.json
 backend/token.json
-.env
+backend/client_secret*.json
 
-# MacOS junk (optional)
+# --- 🖥️ System & IDE Junk ---
 .DS_Store
+Thumbs.db
+.vscode/
+.idea/
+*.pdf
