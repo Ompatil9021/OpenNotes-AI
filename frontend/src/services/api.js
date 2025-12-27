@@ -98,3 +98,24 @@ export const approveItem = async (type, id) => {
     return false;
   }
 };
+// 9. Subscribe to a Subject
+export const subscribeToSubject = async (data) => {
+  try {
+    await axios.post(`${API_BASE_URL}/subscribe`, data);
+    return true;
+  } catch (error) {
+    console.error("Subscription failed:", error);
+    return false;
+  }
+};
+
+// 10. Get My Subscriptions
+export const getMySubscriptions = async (userId) => {
+  try {
+    const response = await axios.get(`${API_BASE_URL}/subscriptions/${userId}`);
+    return response.data;
+  } catch (error) {
+    console.error("Error fetching subscriptions:", error);
+    return [];
+  }
+};

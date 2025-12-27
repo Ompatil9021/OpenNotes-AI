@@ -2,6 +2,8 @@ import os
 import io
 import uvicorn
 import uuid
+import pandas as pd
+import docx
 from fastapi import FastAPI, UploadFile, File, Form, HTTPException, Body
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel  # <--- THIS WAS MISSING
@@ -56,15 +58,41 @@ drive_service = get_drive_service()
 
 # --- 3. HELPER FUNCTIONS ---
 
-def extract_text_from_pdf(file_bytes):
+def extract_text_from_file(file_bytes, filename):
     try:
-        pdf_reader = PyPDF2.PdfReader(io.BytesIO(file_bytes))
-        text = ""
-        for page in pdf_reader.pages:
-            text += page.extract_text() + "\n"
-        return text
+        # A. If it's a PDF
+        if filename.lower().endswith('.pdf'):
+            pdf_reader = PyPDF2.PdfReader(io.BytesIO(file_bytes))
+            text = ""
+            for page in pdf_reader.pages:
+                text += page.extract_text() + "\n"
+            return text
+
+        # B. If it's an Excel file (.xlsx, .xls)
+        elif filename.lower().endswith(('.xlsx', '.xls')):
+            # Read all sheets
+            df_dict = pd.read_excel(io.BytesIO(file_bytes), sheet_name=None)
+            text = ""
+            for sheet_name, df in df_dict.items():
+                text += f"\n--- Sheet: {sheet_name} ---\n"
+                text += df.to_string() + "\n"
+            return text
+
+        # C. If it's a Word Doc (.docx)
+        elif filename.lower().endswith('.docx'):
+            doc = docx.Document(io.BytesIO(file_bytes))
+            text = ""
+            for para in doc.paragraphs:
+                text += para.text + "\n"
+            return text
+
+        # D. Text file
+        elif filename.lower().endswith('.txt'):
+            return file_bytes.decode('utf-8')
+
+        return "" # Unsupported format
     except Exception as e:
-        print(f"Error reading PDF: {e}")
+        print(f"Error extracting text from {filename}: {e}")
         return ""
 
 # --- 4. APP API ---
@@ -93,28 +121,34 @@ async def upload_note(
         # 1. Create a safe filename
         safe_filename = f"{uuid.uuid4()}_{file.filename}"
         
-        # 2. Upload to Google Drive
+        # 2. Read file content
         file_content = await file.read()
+        
+        # 3. Upload to Google Drive
         # Create a temp file to upload
         with open(safe_filename, "wb") as f:
             f.write(file_content)
             
         g_file = drive_service.files().create(
             body={'name': safe_filename, 'parents': [GOOGLE_DRIVE_FOLDER_ID]},
-            media_body=MediaIoBaseUpload(io.BytesIO(file_content), mimetype='application/pdf'),
+            # 👇 DYNAMIC MIMETYPE: Allows Drive to preview Excel/Word correctly
+            media_body=MediaIoBaseUpload(io.BytesIO(file_content), mimetype=file.content_type),
             fields='id, webViewLink'
         ).execute()
         
         # Clean up temp file
         os.remove(safe_filename)
         
-        # 3. Make Public (Viewer)
+        # 4. Make Public (Viewer)
         drive_service.permissions().create(
             fileId=g_file.get('id'),
             body={'type': 'anyone', 'role': 'reader'}
         ).execute()
 
-        # 4. Save to Firestore (MARKED AS PENDING)
+        # 👇 CRITICAL STEP: Extract Text for AI (Excel, Word, PDF)
+        processed_text = extract_text_from_file(file_content, file.filename)
+
+        # 5. Save to Firestore (MARKED AS PENDING)
         note_data = {
             "title": title,
             "subject": subject,
@@ -124,7 +158,8 @@ async def upload_note(
             "fileUrl": g_file.get('webViewLink'),
             "driveId": g_file.get('id'),
             "uploader_id": uploader_id,
-            "is_approved": False,  # 🔒 LOCK IT BY DEFAULT
+            "is_approved": False, 
+            "processed_text": processed_text, # <--- SAVING THE TEXT SO AI CAN READ IT
             "created_at": firestore.SERVER_TIMESTAMP
         }
         
@@ -303,6 +338,40 @@ async def approve_item(collection_name: str, item_id: str):
         # Generic approver for both 'notes' and 'subjects'
         db.collection(collection_name).document(item_id).update({"is_approved": True})
         return {"status": "success", "message": "Item Approved!"}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+    
+
+# --- 9. USER SUBSCRIPTIONS (PERSONALIZATION) ---
+
+class SubscriptionRequest(BaseModel):
+    user_id: str
+    subject_id: str
+    subject_title: str
+    subject_desc: str
+    subject_icon: str = "📚"
+
+@app.post("/subscribe")
+async def subscribe_subject(req: SubscriptionRequest):
+    try:
+        # Save to: users/{user_id}/subscriptions/{subject_id}
+        # This creates a personal list for this user
+        user_ref = db.collection("users").document(req.user_id)
+        user_ref.collection("subscriptions").document(req.subject_id).set({
+            "title": req.subject_title,
+            "description": req.subject_desc,
+            "icon": req.subject_icon
+        })
+        return {"status": "success", "message": "Subscribed!"}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/subscriptions/{user_id}")
+async def get_subscriptions(user_id: str):
+    try:
+        # Fetch only this user's subjects
+        docs = db.collection("users").document(user_id).collection("subscriptions").stream()
+        return [{**doc.to_dict(), "id": doc.id} for doc in docs]
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 

@@ -1,172 +1,224 @@
 import { useState, useEffect } from 'react';
-import { useNavigate } from 'react-router-dom';
-import { Folder, FileText, Video, ChevronRight, ArrowLeft } from 'lucide-react';
-import { collection, query, where, getDocs } from "firebase/firestore";
-import { db } from "../firebaseConfig";
-import { subjects as initialSubjects } from '../data/mockData';
+import { useAuth } from '../context/AuthContext';
+import { getSubjects, getMySubscriptions, subscribeToSubject } from '../services/api';
+import { Search, Plus, BookOpen, CheckCircle, ArrowRight } from 'lucide-react';
+import { Link, useNavigate } from 'react-router-dom';
+
+// Firestore for fetching notes
+import { collection, query, where, getDocs } from 'firebase/firestore'; 
+import { db } from '../services/firebase'; 
 
 const Explore = () => {
+  const { user } = useAuth();
   const navigate = useNavigate();
   
   // State
+  const [mySubjects, setMySubjects] = useState([]);
+  const [allSubjects, setAllSubjects] = useState([]); 
+  const [searchResults, setSearchResults] = useState([]);
+  const [isAdding, setIsAdding] = useState(false);
+  const [searchTerm, setSearchTerm] = useState("");
+  const [loading, setLoading] = useState(true);
+
+  // Selected Subject State
   const [selectedSubject, setSelectedSubject] = useState(null);
-  const [selectedChapter, setSelectedChapter] = useState(null);
-  const [realNotes, setRealNotes] = useState([]); 
-  const [loading, setLoading] = useState(false);
+  const [notes, setNotes] = useState([]);
 
-  // 1. Fetch Notes from Firebase
   useEffect(() => {
-    if (!selectedSubject) return;
+    if (user) {
+      loadData();
+    }
+  }, [user]);
 
-    const fetchNotes = async () => {
-      setLoading(true);
-      try {
-        // Filter by Subject AND Approval Status
-        const q = query(
-          collection(db, "notes"), 
-          where("subject", "==", selectedSubject.title),
-          where("is_approved", "==", true) // ✅ ONLY SHOW APPROVED
-        );
-        const querySnapshot = await getDocs(q);
-        
-        const notesList = [];
-        querySnapshot.forEach((doc) => {
-          notesList.push({ id: doc.id, ...doc.data() });
-        });
-        setRealNotes(notesList);
-      } catch (error) {
-        console.error("Error fetching notes:", error);
-      } finally {
-        setLoading(false);
-      }
-    };
+  const loadData = async () => {
+    setLoading(true);
+    // 1. Get User's Personal List
+    const subs = await getMySubscriptions(user.uid);
+    setMySubjects(subs);
 
-    fetchNotes();
-  }, [selectedSubject]);
-
-  // 2. Logic to Merge Mock Chapters with Real Notes
-  const getActiveChapters = () => {
-    if (!selectedSubject) return [];
-
-    // Safety check: ensure chapters exist
-    const chapters = selectedSubject.chapters ? [...selectedSubject.chapters] : [];
-
-    realNotes.forEach(note => {
-      const chapterName = note.chapter || "General Resources";
-      
-      let existingChapter = chapters.find(ch => ch.title === chapterName);
-      
-      // If chapter doesn't exist, create it
-      if (!existingChapter) {
-        existingChapter = { id: `ch-${Math.random()}`, title: chapterName, topics: [] };
-        chapters.push(existingChapter);
-      }
-
-      // Add note to chapter
-      if (!existingChapter.topics) existingChapter.topics = []; // Safety check
-      
-      existingChapter.topics.push({
-        id: note.id,
-        title: note.title,
-        type: note.youtube_url ? "video" : "pdf",
-        fileUrl: note.view_link,
-        youtubeUrl: note.youtube_url,
-        description: note.description,
-        subject: note.subject 
-      });
-    });
-
-    return chapters;
+    // 2. Get All Available Subjects (for search later)
+    const all = await getSubjects(false); 
+    setAllSubjects(all);
+    setLoading(false);
   };
 
-  const activeChapters = getActiveChapters();
-
-  // 3. Navigation Handlers
-  const handleBack = () => {
-    if (selectedChapter) setSelectedChapter(null);
-    else {
-      setSelectedSubject(null);
-      setRealNotes([]);
+  // Search Logic
+  const handleSearch = (e) => {
+    const term = e.target.value.toLowerCase();
+    setSearchTerm(term);
+    if (term.trim() === "") {
+      setSearchResults([]);
+    } else {
+      const filtered = allSubjects.filter(sub => 
+        sub.title.toLowerCase().includes(term) || 
+        sub.field.toLowerCase().includes(term)
+      );
+      setSearchResults(filtered);
     }
   };
 
+  const handleAddSubject = async (subject) => {
+    await subscribeToSubject({
+      user_id: user.uid,
+      subject_id: subject.id,
+      subject_title: subject.title,
+      subject_desc: subject.description,
+      subject_icon: subject.icon || "📚"
+    });
+    loadData();
+    setIsAdding(false);
+    setSearchTerm("");
+  };
+
+  const handleSelectSubject = async (subject) => {
+    setSelectedSubject(subject);
+    const q = query(
+      collection(db, "notes"), 
+      where("subject", "==", subject.title),
+      where("is_approved", "==", true)
+    );
+    const snapshot = await getDocs(q);
+    setNotes(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })));
+  };
+
   return (
-    <div style={{ padding: '20px', maxWidth: '800px', margin: '0 auto', color: 'white' }}>
+    <div style={{ padding: '40px 20px', maxWidth: '1200px', margin: '0 auto', color: 'white' }}>
       
-      {/* Header */}
-      <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '20px' }}>
-        {(selectedSubject || selectedChapter) && (
-          <button onClick={handleBack} style={{ padding: '5px 10px', background: '#333', border: '1px solid #555', color: 'white', cursor: 'pointer' }}>
-            <ArrowLeft size={16} /> Back
+      {/* HEADER */}
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '30px' }}>
+        <div>
+          <h1 style={{ fontSize: '2rem', marginBottom: '5px' }}>📚 My Subjects</h1>
+          <p style={{ color: '#aaa' }}>Select a subject to view notes.</p>
+        </div>
+        
+        {!isAdding && (
+          <button 
+            onClick={() => setIsAdding(true)}
+            style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '10px 20px', background: '#646cff', color: 'white', border: 'none', borderRadius: '30px', cursor: 'pointer', fontWeight: 'bold' }}
+          >
+            <Plus size={18} /> Add Subject
           </button>
         )}
-        <h1 style={{ fontSize: '1.5rem' }}>
-          {!selectedSubject ? "📚 Explore Subjects" : 
-           !selectedChapter ? `${selectedSubject.icon} ${selectedSubject.title}` : 
-           `📖 ${selectedChapter.title}`}
-        </h1>
       </div>
 
-      {/* VIEW 1: SUBJECT LIST */}
-      {!selectedSubject && (
-        <div className="grid-container">
-          {initialSubjects.map(subject => (
-            <div key={subject.id} className="card hover-card" onClick={() => setSelectedSubject(subject)}>
-              <div style={{ fontSize: '3rem' }}>{subject.icon}</div>
-              <h3>{subject.title}</h3>
-              <p style={{ color: '#aaa' }}>{subject.description}</p>
+      {/* --- ADD SUBJECT MODE --- */}
+      {isAdding && (
+        <div style={{ background: '#1a1a1a', padding: '30px', borderRadius: '15px', border: '1px solid #333', marginBottom: '40px' }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '20px' }}>
+            <h3 style={{ margin: 0 }}>🔍 Find a Subject</h3>
+            <button onClick={() => setIsAdding(false)} style={{ background: 'transparent', border: 'none', color: '#ff4444', cursor: 'pointer' }}>Cancel</button>
+          </div>
+
+          <div style={{ position: 'relative', marginBottom: '20px' }}>
+            <Search size={20} color="#666" style={{ position: 'absolute', left: '15px', top: '12px' }} />
+            <input 
+              autoFocus
+              placeholder="Type to search..."
+              value={searchTerm}
+              onChange={handleSearch}
+              style={{ width: '100%', padding: '12px 12px 12px 45px', background: '#0f0f0f', color: 'white', border: '1px solid #333', borderRadius: '8px', fontSize: '1rem' }}
+            />
+          </div>
+
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '15px' }}>
+            {searchTerm && searchResults.length === 0 && <p style={{ color: '#666' }}>No subjects found.</p>}
+            
+            {searchResults.map(sub => {
+              const isAlreadyAdded = mySubjects.some(m => m.id === sub.id);
+              return (
+                <div key={sub.id} style={{ background: '#222', padding: '15px', borderRadius: '8px', border: '1px solid #333', display: 'flex', flexDirection: 'column', gap: '10px' }}>
+                  <div style={{ fontWeight: 'bold' }}>{sub.title}</div>
+                  <div style={{ fontSize: '0.8rem', color: '#aaa' }}>{sub.field}</div>
+                  
+                  {isAlreadyAdded ? (
+                    <button disabled style={{ background: '#10b981', color: '#fff', border: 'none', padding: '8px', borderRadius: '4px', cursor: 'default', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '5px' }}>
+                      <CheckCircle size={14}/> Added
+                    </button>
+                  ) : (
+                    <button onClick={() => handleAddSubject(sub)} style={{ background: '#646cff', color: 'white', border: 'none', padding: '8px', borderRadius: '4px', cursor: 'pointer' }}>
+                      + Add to My List
+                    </button>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
+      {/* --- MY SUBJECTS LIST --- */}
+      {!selectedSubject ? (
+        <>
+          {mySubjects.length === 0 && !loading && !isAdding ? (
+            <div style={{ textAlign: 'center', padding: '60px', border: '2px dashed #333', borderRadius: '15px', color: '#666' }}>
+              <BookOpen size={48} style={{ marginBottom: '20px', opacity: 0.5 }} />
+              <h2>Your library is empty.</h2>
+              <p>Click "Add Subject" to start building your personal curriculum.</p>
             </div>
-          ))}
-        </div>
-      )}
-
-      {/* VIEW 2: CHAPTER LIST */}
-      {selectedSubject && !selectedChapter && (
-        <div>
-          <h2 style={{ fontSize: '1.2rem', marginBottom: '10px' }}>Select a Chapter:</h2>
-          {loading ? <p>Loading notes...</p> : (
-            <>
-              {activeChapters.length === 0 ? (
-                <p style={{ color: '#aaa' }}>No chapters found.</p>
-              ) : (
-                <div className="list-container">
-                  {activeChapters.map(chapter => (
-                    <div key={chapter.id} className="list-item" onClick={() => setSelectedChapter(chapter)}>
-                      <Folder size={20} color="#646cff" />
-                      <span>{chapter.title}</span>
-                      <ChevronRight size={16} style={{ marginLeft: 'auto' }} />
-                    </div>
-                  ))}
+          ) : (
+            <div className="grid-container">
+              {mySubjects.map((subject) => (
+                <div key={subject.id} className="card" onClick={() => handleSelectSubject(subject)}>
+                  <div style={{ fontSize: '2.5rem', marginBottom: '10px' }}>{subject.icon}</div>
+                  <h3 style={{ marginBottom: '10px' }}>{subject.title}</h3>
+                  <p style={{ color: '#aaa', fontSize: '0.9rem' }}>{subject.description}</p>
                 </div>
-              )}
-            </>
+              ))}
+            </div>
           )}
-        </div>
-      )}
-
-      {/* VIEW 3: NOTES LIST */}
-      {selectedChapter && (
+        </>
+      ) : (
+        /* --- VIEW NOTES FOR SELECTED SUBJECT --- */
         <div>
-          <h2 style={{ fontSize: '1.2rem', marginBottom: '10px' }}>📄 Resources:</h2>
+          <button onClick={() => setSelectedSubject(null)} style={{ marginBottom: '20px', background: 'transparent', border: 'none', color: '#aaa', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '5px' }}>
+            ← Back to Subjects
+          </button>
+          
+          <h2 style={{ borderBottom: '1px solid #333', paddingBottom: '15px' }}>Notes for {selectedSubject.title}</h2>
+          
           <div className="list-container">
-            {selectedChapter.topics && selectedChapter.topics.map((topic, index) => (
-              <div key={index} className="list-item" style={{ flexDirection: 'column', alignItems: 'flex-start' }}>
-                <div style={{ display: 'flex', alignItems: 'center', width: '100%', gap: '10px' }}>
-                  {topic.type === 'video' ? <Video size={20} color="orange" /> : <FileText size={20} color="#4cc9f0" />}
-                  <strong>{topic.title}</strong>
-                  <button 
-                    onClick={() => navigate('/study', { state: { note: topic } })}
-                    style={{ marginLeft: 'auto', padding: '6px 12px', background: '#646cff', border: 'none', borderRadius: '4px', color: 'white', cursor: 'pointer' }}
-                  >
-                    Enter Study Room 🚀
-                  </button>
+            {notes.length === 0 ? <p style={{ color: '#666' }}>No notes found for this subject yet.</p> : notes.map((note) => (
+              <div key={note.id} className="list-item">
+                <div style={{ flex: 1 }}>
+                   <div style={{ fontWeight: 'bold', fontSize: '1.1rem' }}>{note.title}</div>
+                   <div style={{ color: '#888', fontSize: '0.9rem' }}>{note.chapter || "General"} • {note.description}</div>
                 </div>
-                {topic.description && <p style={{ fontSize: '0.85rem', color: '#aaa', margin: '5px 0 0 32px' }}>{topic.description}</p>}
+                
+                {/* 👇 UPDATED BUTTON LOGIC HERE */}
+                {note.fileUrl ? (
+                  <Link 
+                    to="/study" 
+                    state={{ fileUrl: note.fileUrl, noteId: note.id, subject: note.subject }}
+                    style={{ textDecoration: 'none' }}
+                  >
+                    <button style={{ 
+                      padding: '10px 25px', 
+                      background: 'linear-gradient(135deg, #646cff, #944afb)', 
+                      color: 'white', 
+                      border: 'none', 
+                      borderRadius: '30px', 
+                      cursor: 'pointer',
+                      fontWeight: 'bold',
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '8px',
+                      transition: 'transform 0.2s'
+                    }}>
+                      Enter Study Room <ArrowRight size={16}/>
+                    </button>
+                  </Link>
+                ) : (
+                  <button disabled style={{ padding: '8px 20px', background: '#333', color: '#666', border: 'none', borderRadius: '30px', cursor: 'not-allowed' }}>
+                    No PDF Available
+                  </button>
+                )}
+
               </div>
             ))}
           </div>
         </div>
       )}
+
     </div>
   );
 };

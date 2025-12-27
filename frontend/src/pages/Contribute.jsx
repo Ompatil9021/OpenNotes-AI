@@ -168,8 +168,7 @@ const Contribute = () => {
             <div className="form-group">
               <label className="form-label">PDF File *</label>
               <div className="file-drop-zone">
-                <input type="file" accept="application/pdf" className="hidden-input" onChange={handleFileChange} required />
-                <div style={{ pointerEvents: 'none' }}>
+                  <input type="file" className="hidden-input" onChange={handleFileChange} required />                <div style={{ pointerEvents: 'none' }}>
                   <UploadCloud size={40} color="#646cff" style={{ marginBottom: '10px' }} />
                   {noteForm.file ? (
                     <div style={{ color: '#4cc9f0', fontWeight: 'bold' }}>

@@ -1,224 +1,167 @@
+import { useLocation, Link } from 'react-router-dom';
 import { useState, useEffect } from 'react';
-import { useLocation, useNavigate } from 'react-router-dom';
-import { MessageSquare, Video, ArrowLeft, PanelRightClose, PanelRightOpen } from 'lucide-react';
-import { askAI } from '../services/api';
+import { ArrowLeft, MessageSquare, FileText, Send } from 'lucide-react';
+import { askAI } from '../services/api'; 
+import { useAuth } from '../context/AuthContext';
 
 const StudyRoom = () => {
   const location = useLocation();
-  const navigate = useNavigate();
-  const note = location.state?.note;
+  const { user } = useAuth();
+  
+  // 1. SAFEGUARD: Get data from state, or default to empty object to prevent crashes
+  const { fileUrl, noteId, subject } = location.state || {};
 
-  // Sidebar State
-  const [isSidebarOpen, setIsSidebarOpen] = useState(true);
-  const [activeTab, setActiveTab] = useState('chat');
-  const [chatHistory, setChatHistory] = useState([
-    { sender: "ai", text: "Hi! I've read this note. Ask me anything about it." }
+  const [chatOpen, setChatOpen] = useState(true);
+  const [messages, setMessages] = useState([
+    { sender: 'ai', text: "Hi! I've read this note. Ask me anything about it." }
   ]);
-  const [question, setQuestion] = useState("");
+  const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
 
+  // 2. DEBUGGING: Log what we received
   useEffect(() => {
-    if (!note) navigate('/explore');
-  }, [note, navigate]);
+    console.log("StudyRoom Received Data:", { fileUrl, noteId, subject });
+  }, [fileUrl, noteId, subject]);
 
-  if (!note) return null;
+  // 3. IF DATA IS MISSING: Show error instead of redirecting
+  if (!fileUrl) {
+    return (
+      <div style={{ height: '100vh', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', background: '#111', color: 'white' }}>
+        <h2>⚠️ Error Loading Note</h2>
+        <p style={{ color: '#aaa', marginBottom: '20px' }}>No PDF URL was provided for this note.</p>
+        <p style={{ fontSize: '0.9rem', fontFamily: 'monospace', background: '#222', padding: '10px' }}>
+          Debug Info: {JSON.stringify(location.state || "No State Received")}
+        </p>
+        <Link to="/explore">
+          <button style={{ padding: '10px 20px', background: '#646cff', color: 'white', border: 'none', borderRadius: '5px', cursor: 'pointer' }}>
+            Go Back
+          </button>
+        </Link>
+      </div>
+    );
+  }
 
-  const getEmbedUrl = (url) => {
-    if (!url) return "";
-    if (url.includes("/preview")) return url;
-    if (url.includes("/view")) return url.replace("/view", "/preview");
-    return url;
-  };
+  // 4. FIX GOOGLE DRIVE LINKS (Convert /view -> /preview for embedding)
+  // Google Drive 'webViewLink' usually ends in '/view'. We need '/preview' for iframes.
+  const embedUrl = fileUrl.replace('/view', '/preview');
 
-  const handleAskAI = async () => {
-    if (!question.trim()) return;
-    const newHistory = [...chatHistory, { sender: "user", text: question }];
-    setChatHistory(newHistory);
-    setQuestion("");
+  const handleSend = async () => {
+    if (!input.trim()) return;
+    
+    const userMsg = { sender: 'user', text: input };
+    setMessages(prev => [...prev, userMsg]);
+    setInput("");
     setLoading(true);
 
-    const answer = await askAI(question, note.subject);
-
-    setChatHistory([...newHistory, { sender: "ai", text: answer }]);
+    // Call AI API
+    const aiResponse = await askAI(input, subject || "General");
+    
+    setMessages(prev => [...prev, { sender: 'ai', text: aiResponse }]);
     setLoading(false);
   };
 
   return (
-    // 🔒 SUPER CONTAINER: Fixed Position locks it to the viewport (No Page Scrollbars)
-    <div style={{ 
-      position: 'fixed', 
-      top: 0, 
-      left: 0, 
-      width: '100%', 
-      height: '100%', 
-      display: 'flex', 
-      flexDirection: 'column', 
-      background: '#000',
-      overflow: 'hidden' // Double safety
-    }}>
+    <div style={{ display: 'flex', height: '100vh', width: '100vw', overflow: 'hidden', background: '#000' }}>
       
-      {/* --- HEADER (Fixed Height: 50px) --- */}
-      <div style={{ 
-        height: '50px', 
-        minHeight: '50px', // Prevent crushing
-        padding: '0 20px', 
-        background: '#1a1a1a', 
-        borderBottom: '1px solid #333', 
-        display: 'flex', 
-        alignItems: 'center', 
-        justifyContent: 'space-between',
-        boxSizing: 'border-box'
-      }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: '15px' }}>
-          <button onClick={() => navigate('/explore')} style={{ background: 'transparent', border: 'none', cursor: 'pointer', color: '#ccc' }}>
-            <ArrowLeft size={20} />
-          </button>
-          <h3 style={{ margin: 0, fontSize: '1rem', color: 'white' }}>{note.title}</h3>
-          <span style={{ fontSize: '0.8rem', background: '#333', padding: '2px 8px', borderRadius: '4px', color: '#aaa' }}>{note.subject}</span>
-        </div>
-
-        {!isSidebarOpen && (
-          <button 
-            onClick={() => setIsSidebarOpen(true)}
-            style={{ display: 'flex', alignItems: 'center', gap: '5px', background: '#646cff', border: 'none', padding: '6px 12px', borderRadius: '4px', cursor: 'pointer', color: 'white' }}
-          >
-            <PanelRightOpen size={18} /> Open Tools
-          </button>
-        )}
-      </div>
-
-      {/* --- SPLIT CONTENT (Takes Remaining Height) --- */}
-      <div style={{ 
-        flex: 1, 
-        display: 'flex', 
-        width: '100%', 
-        overflow: 'hidden' // Ensures children don't push boundaries
-      }}>
+      {/* LEFT: PDF VIEWER */}
+      <div style={{ flex: 1, position: 'relative', borderRight: '1px solid #333' }}>
         
-        {/* 1. PDF VIEWER (Left Side) */}
+        {/* Top Bar inside PDF area */}
         <div style={{ 
-          // 75% Width if sidebar is open, 100% if closed
-          flex: isSidebarOpen ? '0 0 75%' : '0 0 100%',
-          maxWidth: isSidebarOpen ? '75%' : '100%',
-          height: '100%', 
-          background: '#000',
-          transition: 'all 0.2s ease-in-out'
+          height: '50px', background: '#1a1a1a', borderBottom: '1px solid #333', 
+          display: 'flex', alignItems: 'center', padding: '0 20px', justifyContent: 'space-between'
         }}>
-          <iframe 
-            src={getEmbedUrl(note.fileUrl)} 
-            width="100%" 
-            height="100%" 
-            style={{ border: 'none', display: 'block' }}
-            title="PDF Viewer"
-          ></iframe>
+          {/* Left Side: Back Button & Title */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: '15px' }}>
+            <Link to="/explore" style={{ textDecoration: 'none', color: '#ccc', display: 'flex', alignItems: 'center', gap: '5px', fontSize: '0.9rem' }}>
+              <ArrowLeft size={16} /> Back
+            </Link>
+            <span style={{ color: '#666', fontSize: '0.8rem', fontWeight: 'bold' }}>
+              {subject?.toUpperCase() || "STUDY MODE"}
+            </span>
+          </div>
+
+          {/* Right Side: Open in New Tab Button (NEW) */}
+          <a href={fileUrl} target="_blank" rel="noreferrer" style={{ textDecoration: 'none' }}>
+             <button style={{ 
+               background: '#333', color: '#ccc', border: '1px solid #555', 
+               padding: '5px 12px', borderRadius: '4px', cursor: 'pointer', fontSize: '0.8rem',
+               display: 'flex', alignItems: 'center', gap: '5px'
+             }}>
+               <FileText size={14}/> Open in New Tab
+             </button>
+          </a>
         </div>
 
-        {/* 2. SIDEBAR (Right Side) */}
-        {isSidebarOpen && (
-          <div style={{ 
-            // 25% Width strictly
-            flex: '0 0 25%',
-            maxWidth: '25%', 
-            height: '100%',
-            background: '#222', 
-            borderLeft: '1px solid #333',
-            display: 'flex', 
-            flexDirection: 'column',
-            boxSizing: 'border-box'
-          }}>
-            
-            {/* Sidebar Header */}
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '10px 15px', borderBottom: '1px solid #444', background: '#2a2a2a', minHeight: '45px' }}>
-              <span style={{ fontWeight: 'bold', color: '#4cc9f0', fontSize: '0.9rem' }}>Study Mode</span>
-              <button onClick={() => setIsSidebarOpen(false)} style={{ background: 'transparent', border: 'none', cursor: 'pointer', color: '#aaa' }} title="Close">
-                <PanelRightClose size={20} />
-              </button>
+        {/* The PDF Iframe */}
+        <iframe 
+          src={embedUrl} 
+          width="100%" 
+          height="100%" 
+          style={{ border: 'none', background: '#222' }} 
+          title="PDF Viewer"
+          allow="autoplay"
+        ></iframe>
+      </div>
+
+      {/* RIGHT: AI CHAT (Collapsible) */}
+      <div style={{ width: chatOpen ? '400px' : '0px', transition: 'width 0.3s ease', background: '#111', display: 'flex', flexDirection: 'column', borderLeft: '1px solid #333' }}>
+        
+        {/* Chat Header */}
+        <div style={{ padding: '15px', borderBottom: '1px solid #333', display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: '#1a1a1a' }}>
+          <h3 style={{ margin: 0, fontSize: '1rem', color: 'white', display: 'flex', alignItems: 'center', gap: '8px' }}>
+            <MessageSquare size={18} color="#646cff" /> AI Tutor
+          </h3>
+          <button onClick={() => setChatOpen(false)} style={{ background: 'transparent', border: 'none', color: '#666', cursor: 'pointer' }}>×</button>
+        </div>
+
+        {/* Messages Area */}
+        <div style={{ flex: 1, overflowY: 'auto', padding: '20px', display: 'flex', flexDirection: 'column', gap: '15px' }}>
+          {messages.map((m, i) => (
+            <div key={i} style={{ 
+              alignSelf: m.sender === 'user' ? 'flex-end' : 'flex-start',
+              maxWidth: '85%',
+              background: m.sender === 'user' ? '#646cff' : '#222',
+              color: 'white',
+              padding: '12px 16px',
+              borderRadius: '12px',
+              lineHeight: '1.4',
+              fontSize: '0.95rem'
+            }}>
+              {m.text}
             </div>
+          ))}
+          {loading && <div style={{ color: '#666', fontSize: '0.8rem', marginLeft: '10px' }}>AI is thinking...</div>}
+        </div>
 
-            {/* Tabs */}
-            <div style={{ display: 'flex', borderBottom: '1px solid #444', minHeight: '40px' }}>
-              <button 
-                onClick={() => setActiveTab('chat')}
-                style={{ flex: 1, background: activeTab === 'chat' ? '#333' : 'transparent', border: 'none', cursor: 'pointer', color: activeTab === 'chat' ? 'white' : '#888', fontWeight: 'bold', fontSize: '0.9rem' }}
-              >
-                Chat
-              </button>
-              
-              {note.youtubeUrl && (
-                <button 
-                  onClick={() => setActiveTab('video')}
-                  style={{ flex: 1, background: activeTab === 'video' ? '#333' : 'transparent', border: 'none', cursor: 'pointer', color: activeTab === 'video' ? 'white' : '#888', fontWeight: 'bold', fontSize: '0.9rem' }}
-                >
-                  Video
-                </button>
-              )}
-            </div>
-
-            {/* Content Area */}
-            <div style={{ flex: 1, overflowY: 'auto', padding: '15px', display: 'flex', flexDirection: 'column' }}>
-              
-              {/* CHAT TAB */}
-              {activeTab === 'chat' && (
-                <>
-                  <div style={{ flex: 1, overflowY: 'auto', marginBottom: '15px', display: 'flex', flexDirection: 'column', gap: '12px' }}>
-                    {chatHistory.map((msg, i) => (
-                      <div key={i} style={{ 
-                        alignSelf: msg.sender === 'user' ? 'flex-end' : 'flex-start',
-                        background: msg.sender === 'user' ? '#646cff' : '#333',
-                        color: 'white',
-                        padding: '10px 12px', 
-                        borderRadius: '10px', 
-                        maxWidth: '90%', 
-                        fontSize: '0.85rem',
-                        lineHeight: '1.4',
-                        wordWrap: 'break-word' // Prevents long words breaking layout
-                      }}>
-                        <strong>{msg.sender === 'ai' ? '🤖 ' : '👤 '}</strong>
-                        {msg.text}
-                      </div>
-                    ))}
-                    {loading && <div style={{ color: '#888', fontStyle: 'italic', fontSize: '0.8rem' }}>AI is thinking...</div>}
-                  </div>
-
-                  <div style={{ display: 'flex', gap: '8px', paddingBottom: '10px' }}>
-                    <input 
-                      value={question} 
-                      onChange={(e) => setQuestion(e.target.value)}
-                      onKeyPress={(e) => e.key === 'Enter' && handleAskAI()}
-                      placeholder="Ask AI..." 
-                      style={{ flex: 1, padding: '10px', borderRadius: '4px', border: '1px solid #444', background: '#1a1a1a', color: 'white', outline: 'none', fontSize: '0.9rem' }}
-                    />
-                    <button 
-                      onClick={handleAskAI} 
-                      disabled={loading} 
-                      style={{ background: '#646cff', border: 'none', borderRadius: '4px', padding: '0 15px', color: 'white', cursor: 'pointer', fontWeight: 'bold', fontSize: '0.9rem' }}
-                    >
-                      Send
-                    </button>
-                  </div>
-                </>
-              )}
-
-              {/* VIDEO TAB */}
-              {activeTab === 'video' && note.youtubeUrl && (
-                <div style={{ textAlign: 'center', marginTop: '10px' }}>
-                  <iframe 
-                    width="100%" 
-                    height="200" 
-                    src={note.youtubeUrl.replace("watch?v=", "embed/")} 
-                    title="YouTube video" 
-                    frameBorder="0" 
-                    allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture" 
-                    allowFullScreen
-                    style={{ borderRadius: '8px' }}
-                  ></iframe>
-                </div>
-              )}
-            </div>
+        {/* Input Area */}
+        <div style={{ padding: '20px', borderTop: '1px solid #333', background: '#1a1a1a' }}>
+          <div style={{ display: 'flex', gap: '10px' }}>
+            <input 
+              value={input}
+              onChange={(e) => setInput(e.target.value)}
+              onKeyDown={(e) => e.key === 'Enter' && handleSend()}
+              placeholder="Ask a question..." 
+              style={{ flex: 1, padding: '12px', borderRadius: '8px', border: '1px solid #333', background: '#0f0f0f', color: 'white', outline: 'none' }}
+            />
+            <button onClick={handleSend} disabled={loading} style={{ background: '#646cff', color: 'white', border: 'none', borderRadius: '8px', padding: '0 15px', cursor: 'pointer' }}>
+              <Send size={18} />
+            </button>
           </div>
-        )}
+        </div>
 
       </div>
+
+      {/* Floating Toggle Button (Visible when chat is closed) */}
+      {!chatOpen && (
+        <button 
+          onClick={() => setChatOpen(true)}
+          style={{ position: 'absolute', bottom: '20px', right: '20px', padding: '15px', borderRadius: '50%', background: '#646cff', color: 'white', border: 'none', cursor: 'pointer', boxShadow: '0 4px 10px rgba(0,0,0,0.5)' }}
+        >
+          <MessageSquare size={24} />
+        </button>
+      )}
+
     </div>
   );
 };
