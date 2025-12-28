@@ -1,251 +1,260 @@
 import { useState, useEffect } from 'react';
-import { getSubjects, requestSubject, uploadNote } from '../services/api';
+import { getSubjects, requestSubject, uploadNote, createOnlineNote } from '../services/api';
 import { useAuth } from '../context/AuthContext';
 import { useNavigate } from 'react-router-dom';
-import { UploadCloud, BookPlus, FileText, Youtube, FileType, Book } from 'lucide-react';
+import { UploadCloud, PenTool, BookPlus, CheckCircle } from 'lucide-react';
 
 const Contribute = () => {
   const { user } = useAuth();
   const navigate = useNavigate();
-  const [activeTab, setActiveTab] = useState('note'); // 'note' or 'subject'
+  const [activeTab, setActiveTab] = useState('upload'); // 'upload', 'write', 'subject'
   const [loading, setLoading] = useState(false);
   const [availableSubjects, setAvailableSubjects] = useState([]);
 
-  // Fetch subjects for dropdown
+  // Load subjects for the dropdown
   useEffect(() => {
     async function load() {
-      const subs = await getSubjects(false); // Only approved subjects
+      const subs = await getSubjects(false);
       setAvailableSubjects(subs);
     }
     load();
   }, []);
 
-  // --- FORM 1: UPLOAD NOTE STATE ---
-  const [noteForm, setNoteForm] = useState({ 
-    title: '', 
-    subject: '', 
-    chapter: '', 
-    description: '', 
-    youtube_url: '', 
-    file: null 
+  // --- STATE FOR UPLOAD & WRITE ---
+  const [meta, setMeta] = useState({ 
+    title: '', subject: '', course: '', topic: '', tags: '', academic_level: '', description: '', youtube_url: '' 
   });
+  const [file, setFile] = useState(null);
+  const [editorContent, setEditorContent] = useState('');
 
-  const handleNoteChange = (e) => {
-    setNoteForm({ ...noteForm, [e.target.name]: e.target.value });
-  };
+  // --- STATE FOR SUBJECT REQUEST (RESTORED) ---
+// Change this line:
+const [subjectForm, setSubjectForm] = useState({ title: '', code: '', field: '', description: '' });
+  // --- HANDLERS ---
+  const handleMetaChange = (e) => setMeta({ ...meta, [e.target.name]: e.target.value });
 
-  const handleFileChange = (e) => {
-    if (e.target.files && e.target.files[0]) {
-      setNoteForm({ ...noteForm, file: e.target.files[0] });
-    }
-  };
-
-  const handleNoteSubmit = async (e) => {
+  // 1. Handle File Upload
+  const handleUploadSubmit = async (e) => {
     e.preventDefault();
-    if (!noteForm.file || !noteForm.subject || !noteForm.title) return alert("Missing required fields!");
+    if (!file || !meta.subject || !meta.title) return alert("Missing file or title!");
     setLoading(true);
     
     const data = new FormData();
-    data.append("file", noteForm.file);
-    data.append("title", noteForm.title);
-    data.append("subject", noteForm.subject);
-    data.append("chapter", noteForm.chapter);        // ✅ Restored
-    data.append("description", noteForm.description); // ✅ Restored
-    data.append("youtube_url", noteForm.youtube_url); // ✅ Restored
+    data.append("file", file);
+    Object.keys(meta).forEach(key => data.append(key, meta[key]));
     data.append("uploader_id", user.uid);
 
     try {
       await uploadNote(data);
-      alert("✅ Note Uploaded! It will be visible after Admin Approval.");
+      alert("✅ Uploaded successfully! Waiting for approval.");
       navigate('/dashboard');
     } catch (err) { alert("Error uploading."); }
     setLoading(false);
   };
 
-  // --- FORM 2: REQUEST SUBJECT STATE ---
-  const [subForm, setSubForm] = useState({ title: '', field: '', description: '' });
+  // 2. Handle Online Note Creation
+  const handleWriteSubmit = async (e) => {
+    e.preventDefault();
+    if (!editorContent || !meta.subject || !meta.title) return alert("Missing content!");
+    setLoading(true);
 
+    try {
+      await createOnlineNote({
+        ...meta,
+        content: editorContent,
+        uploader_id: user.uid
+      });
+      alert("✅ Note Created! Waiting for approval.");
+      navigate('/dashboard');
+    } catch (err) { alert("Error saving."); }
+    setLoading(false);
+  };
+
+  // 3. Handle Subject Request (RESTORED)
   const handleSubjectSubmit = async (e) => {
     e.preventDefault();
+    if (!subjectForm.title || !subjectForm.field) return alert("Please fill all fields");
     setLoading(true);
-    const success = await requestSubject({ ...subForm, uploader_id: user.uid });
-    if (success) {
-      alert("✅ Subject Requested! Admin will review it shortly.");
-      setSubForm({ title: '', field: '', description: '' });
-    } else {
-      alert("Error requesting subject.");
+    const success = await requestSubject({ ...subjectForm, uploader_id: user.uid });
+
+    try {
+      await requestSubject({ ...subjectForm, uploader_id: user.uid });
+      alert("✅ Subject requested! Admin will review it.");
+      setSubjectForm({ title: '', field: '', description: '' }); // Reset form
+      setActiveTab('upload'); // Switch back to main tab
+    } catch (error) {
+      console.error(error);
+      alert("Failed to request subject.");
     }
     setLoading(false);
   };
 
   return (
-    <div style={{ padding: '40px 20px', maxWidth: '800px', margin: '0 auto', color: 'white' }}>
-      
-      <h1 style={{ textAlign: 'center', marginBottom: '10px' }}>🤝 Contribute to OpenNotes</h1>
-      <p style={{ textAlign: 'center', color: '#aaa', marginBottom: '40px' }}>
-        Help us grow. Add notes to existing topics or propose entirely new fields.
-      </p>
+    <div style={{ padding: '40px 20px', maxWidth: '900px', margin: '0 auto', color: 'white' }}>
+      <h1 style={{ textAlign: 'center', marginBottom: '40px' }}>🚀 Contribute Knowledge</h1>
 
-      {/* Tabs */}
-      <div style={{ display: 'flex', gap: '20px', marginBottom: '30px', borderBottom: '1px solid #333' }}>
-        <TabButton active={activeTab === 'note'} onClick={() => setActiveTab('note')} icon={<UploadCloud size={20}/>} label="Upload Note" />
-        <TabButton active={activeTab === 'subject'} onClick={() => setActiveTab('subject')} icon={<BookPlus size={20}/>} label="Request New Subject" />
+      {/* TABS */}
+      <div style={{ display: 'flex', gap: '15px', marginBottom: '30px', justifyContent: 'center' }}>
+        <TabBtn active={activeTab === 'upload'} onClick={() => setActiveTab('upload')} icon={<UploadCloud/>} label="Upload File" />
+        <TabBtn active={activeTab === 'write'} onClick={() => setActiveTab('write')} icon={<PenTool/>} label="Write Online" />
+        <TabBtn active={activeTab === 'subject'} onClick={() => setActiveTab('subject')} icon={<BookPlus/>} label="Request Subject" />
       </div>
 
-      {/* --- CONTENT AREA --- */}
-      <div style={{ background: '#1a1a1a', padding: '30px', borderRadius: '15px', border: '1px solid #333', boxShadow: '0 4px 20px rgba(0,0,0,0.3)' }}>
+      <div style={{ background: '#1a1a1a', padding: '30px', borderRadius: '15px', border: '1px solid #333' }}>
         
-        {/* VIEW 1: UPLOAD NOTE (DETAILED FORM) */}
-        {activeTab === 'note' && (
-          <form onSubmit={handleNoteSubmit}>
+        {/* === META DATA FORM (Used by both Upload & Write) === */}
+        {(activeTab === 'upload' || activeTab === 'write') && (
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '20px', marginBottom: '20px' }}>
+            <div className="full-width" style={{ gridColumn: 'span 2' }}>
+              <label className="lbl">Title *</label>
+              <input className="inp" name="title" onChange={handleMetaChange} placeholder="e.g. Thermodynamics formulas" required />
+            </div>
+
+            <div>
+              <label className="lbl">Subject *</label>
+              <select className="inp" name="subject" onChange={handleMetaChange} required>
+                <option value="">-- Select Subject --</option>
+                {availableSubjects.map(s => <option key={s.id} value={s.title}>{s.title}</option>)}
+              </select>
+            </div>
+
+            <div>
+              <label className="lbl">Academic Level</label>
+              <select className="inp" name="academic_level" onChange={handleMetaChange}>
+                <option value="">-- Select Level --</option>
+                <option value="High School">High School</option>
+                <option value="Undergraduate">Undergraduate</option>
+                <option value="Graduate">Graduate</option>
+                <option value="PhD">PhD</option>
+              </select>
+            </div>
+
+            <div>
+              <label className="lbl">Course Code</label>
+              <input className="inp" name="course" onChange={handleMetaChange} placeholder="e.g. CS101" />
+            </div>
+
+            <div>
+              <label className="lbl">Topic / Unit</label>
+              <input className="inp" name="topic" onChange={handleMetaChange} placeholder="e.g. Recursion" />
+            </div>
+
+            <div style={{ gridColumn: 'span 2' }}>
+              <label className="lbl">Tags (comma separated)</label>
+              <input className="inp" name="tags" onChange={handleMetaChange} placeholder="e.g. exam, formula, 2024, important" />
+            </div>
             
-            {/* Title */}
-            <div className="form-group">
-              <label className="form-label">Note Title *</label>
-              <div style={{ position: 'relative' }}>
-                <input 
-                  className="form-input" 
-                  name="title" 
-                  placeholder="e.g. Thermodynamics Unit 1" 
-                  onChange={handleNoteChange} 
-                  required 
-                />
-                <FileText size={18} color="#666" style={{ position: 'absolute', right: '15px', top: '12px' }} />
-              </div>
+            <div style={{ gridColumn: 'span 2' }}>
+              <label className="lbl">Description (Optional)</label>
+              <input className="inp" name="description" onChange={handleMetaChange} placeholder="Brief summary of the note..." />
             </div>
+          </div>
+        )}
 
-            {/* Subject & Chapter Row */}
-            <div style={{ display: 'flex', gap: '20px' }}>
-              <div className="form-group" style={{ flex: 1 }}>
-                <label className="form-label">Subject *</label>
-                <div style={{ position: 'relative' }}>
-                  <select className="form-select" name="subject" onChange={handleNoteChange} required>
-                    <option value="">-- Choose Subject --</option>
-                    {availableSubjects.map(s => <option key={s.id} value={s.title}>{s.title}</option>)}
-                  </select>
-                  <Book size={18} color="#666" style={{ position: 'absolute', right: '15px', top: '12px', pointerEvents: 'none' }} />
-                </div>
-              </div>
-
-              <div className="form-group" style={{ flex: 1 }}>
-                <label className="form-label">Unit / Chapter</label>
-                <input 
-                  className="form-input" 
-                  name="chapter" 
-                  placeholder="e.g. Chapter 4" 
-                  onChange={handleNoteChange} 
-                />
-              </div>
+        {/* === TAB 1: UPLOAD === */}
+        {activeTab === 'upload' && (
+          <form onSubmit={handleUploadSubmit}>
+            <div className="drop-zone" style={{ border: '2px dashed #444', padding: '40px', textAlign: 'center', marginBottom: '20px', borderRadius: '10px' }}>
+              <input type="file" onChange={(e) => setFile(e.target.files[0])} style={{ display: 'none' }} id="fileup" />
+              <label htmlFor="fileup" style={{ cursor: 'pointer' }}>
+                <UploadCloud size={40} color="#646cff" />
+                <p style={{ marginTop: '10px' }}>{file ? file.name : "Click to select PDF, DOCX, PPT, or Image"}</p>
+              </label>
             </div>
-
-            {/* YouTube Link */}
-            <div className="form-group">
-              <label className="form-label">Reference Video URL (Optional)</label>
-              <div style={{ position: 'relative' }}>
-                <input 
-                  className="form-input" 
-                  name="youtube_url" 
-                  placeholder="https://youtube.com/watch?v=..." 
-                  onChange={handleNoteChange} 
-                />
-                <Youtube size={18} color="#666" style={{ position: 'absolute', right: '15px', top: '12px' }} />
-              </div>
-            </div>
-
-            {/* Description */}
-            <div className="form-group">
-              <label className="form-label">Description / Topics Covered</label>
-              <textarea 
-                className="form-textarea" 
-                name="description" 
-                placeholder="Briefly describe the topics covered in this note..." 
-                rows="3" 
-                onChange={handleNoteChange}
-              ></textarea>
-            </div>
-
-            {/* File Upload (Drag & Drop Style) */}
-            <div className="form-group">
-              <label className="form-label">PDF File *</label>
-              <div className="file-drop-zone">
-                  <input type="file" className="hidden-input" onChange={handleFileChange} required />                <div style={{ pointerEvents: 'none' }}>
-                  <UploadCloud size={40} color="#646cff" style={{ marginBottom: '10px' }} />
-                  {noteForm.file ? (
-                    <div style={{ color: '#4cc9f0', fontWeight: 'bold' }}>
-                      <FileType size={16} style={{ marginRight: '5px', verticalAlign: 'middle' }} />
-                      {noteForm.file.name}
-                    </div>
-                  ) : (
-                    <>
-                      <p style={{ margin: 0, fontWeight: 'bold' }}>Click to Upload PDF</p>
-                      <p style={{ margin: '5px 0 0 0', fontSize: '0.8rem', color: '#666' }}>Max size 10MB</p>
-                    </>
-                  )}
-                </div>
-              </div>
-            </div>
-
-            <button disabled={loading} className="submit-btn">
-              {loading ? "🚀 Uploading..." : "Submit Note for Review"}
-            </button>
+            <button className="btn-primary" disabled={loading}>{loading ? "Uploading..." : "Submit File"}</button>
           </form>
         )}
 
-        {/* VIEW 2: REQUEST SUBJECT */}
-        {activeTab === 'subject' && (
-          <form onSubmit={handleSubjectSubmit}>
-            <div className="form-group">
-              <label className="form-label">New Subject Name</label>
-              <input 
-                className="form-input"
-                placeholder="e.g. Pharmaceutics"
-                value={subForm.title}
-                onChange={(e) => setSubForm({...subForm, title: e.target.value})}
-                required
-              />
-            </div>
-
-            <div className="form-group">
-              <label className="form-label">Field / Category</label>
-              <input 
-                className="form-input"
-                placeholder="e.g. Pharmacy, Civil Engineering"
-                value={subForm.field}
-                onChange={(e) => setSubForm({...subForm, field: e.target.value})}
-                required
-              />
-            </div>
-
-            <div className="form-group">
-              <label className="form-label">Description</label>
-              <textarea 
-                className="form-textarea"
-                placeholder="Briefly explain what this subject covers..."
-                value={subForm.description}
-                onChange={(e) => setSubForm({...subForm, description: e.target.value})}
-                rows={3}
-              />
-            </div>
-
-            <button disabled={loading} className="submit-btn" style={{ background: '#10b981' }}>
-              {loading ? "Sending..." : "Request New Subject"}
-            </button>
+        {/* === TAB 2: WRITE ONLINE === */}
+        {activeTab === 'write' && (
+          <form onSubmit={handleWriteSubmit}>
+            <label className="lbl">Content (Markdown Supported)</label>
+            <textarea 
+              style={{ width: '100%', height: '300px', background: '#0f0f0f', color: '#ddd', padding: '15px', border: '1px solid #333', borderRadius: '8px', fontFamily: 'monospace' }}
+              placeholder="# My Note Title&#10;Write your notes here..."
+              onChange={(e) => setEditorContent(e.target.value)}
+            ></textarea>
+            <button className="btn-primary" style={{ marginTop: '20px' }} disabled={loading}>{loading ? "Saving..." : "Create Note"}</button>
           </form>
+        )}
+
+        {/* === TAB 3: REQUEST SUBJECT (RESTORED) === */}
+        {activeTab === 'subject' && (
+           <form onSubmit={handleSubjectSubmit} style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
+             <div style={{ background: '#222', padding: '20px', borderRadius: '8px', borderLeft: '4px solid #646cff' }}>
+               <h3 style={{ margin: '0 0 10px 0' }}>Request a New Subject</h3>
+               <p style={{ margin: 0, color: '#aaa', fontSize: '0.9rem' }}>
+                 Can't find your subject in the list? Request it here! Once an Admin approves it, it will appear for everyone.
+               </p>
+             </div>
+
+             <div>
+               <label className="lbl">Subject Name</label>
+               <input 
+                 className="inp" 
+                 value={subjectForm.title}
+                 onChange={(e) => setSubjectForm({...subjectForm, title: e.target.value})}
+                 placeholder="e.g. Artificial Intelligence" 
+                 required 
+               />
+             </div>
+             <div>
+               <label className="lbl">Subject Code</label>
+               <input 
+                 className="inp" 
+                 value={subjectForm.code}
+                 onChange={(e) => setSubjectForm({...subjectForm, code: e.target.value})}
+                 placeholder="e.g. CS305" 
+                 required 
+               />
+             </div>
+
+             <div>
+               <label className="lbl">Field / Category</label>
+               <input 
+                 className="inp" 
+                 value={subjectForm.field}
+                 onChange={(e) => setSubjectForm({...subjectForm, field: e.target.value})}
+                 placeholder="e.g. Engineering, Arts, Science" 
+                 required 
+               />
+             </div>
+
+             <div>
+               <label className="lbl">Description</label>
+               <textarea 
+                 className="inp" 
+                 value={subjectForm.description}
+                 onChange={(e) => setSubjectForm({...subjectForm, description: e.target.value})}
+                 placeholder="What is this subject about?" 
+                 rows="3"
+               />
+             </div>
+
+             <button className="btn-primary" disabled={loading}>
+               {loading ? "Sending..." : "Request Subject"}
+             </button>
+           </form>
         )}
 
       </div>
+
+      {/* STYLES */}
+      <style>{`
+        .lbl { display: block; margin-bottom: 5px; color: #aaa; font-size: 0.9rem; }
+        .inp { width: 100%; padding: 10px; background: #222; border: 1px solid #333; color: white; borderRadius: 5px; }
+        .btn-primary { width: 100%; padding: 12px; background: #646cff; color: white; border: none; borderRadius: 5px; font-weight: bold; cursor: pointer; }
+        .btn-primary:hover { background: #535bf2; }
+      `}</style>
     </div>
   );
 };
 
-// UI Helper for Tabs
-const TabButton = ({ active, onClick, icon, label }) => (
+const TabBtn = ({ active, onClick, icon, label }) => (
   <button onClick={onClick} style={{
-    flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '10px',
-    padding: '15px', background: 'transparent', border: 'none',
-    borderBottom: active ? '3px solid #646cff' : '3px solid transparent',
-    color: active ? 'white' : '#666', fontWeight: 'bold', cursor: 'pointer', fontSize: '1rem',
-    transition: 'all 0.2s'
+    display: 'flex', alignItems: 'center', gap: '8px', padding: '10px 20px',
+    background: active ? '#646cff' : '#222', color: active ? 'white' : '#aaa',
+    border: 'none', borderRadius: '30px', cursor: 'pointer', fontWeight: 'bold'
   }}>
     {icon} {label}
   </button>

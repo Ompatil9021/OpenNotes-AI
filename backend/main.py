@@ -4,6 +4,9 @@ import uvicorn
 import uuid
 import pandas as pd
 import docx
+from pptx import Presentation  # <--- NEW: For PowerPoint
+from reportlab.pdfgen import canvas # <--- NEW: To save written notes as PDF
+from reportlab.lib.pagesizes import letter
 from fastapi import FastAPI, UploadFile, File, Form, HTTPException, Body
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel  # <--- THIS WAS MISSING
@@ -60,41 +63,56 @@ drive_service = get_drive_service()
 
 def extract_text_from_file(file_bytes, filename):
     try:
-        # A. If it's a PDF
-        if filename.lower().endswith('.pdf'):
-            pdf_reader = PyPDF2.PdfReader(io.BytesIO(file_bytes))
-            text = ""
-            for page in pdf_reader.pages:
-                text += page.extract_text() + "\n"
-            return text
+        text = ""
+        filename = filename.lower()
+        file_stream = io.BytesIO(file_bytes)
 
-        # B. If it's an Excel file (.xlsx, .xls)
-        elif filename.lower().endswith(('.xlsx', '.xls')):
-            # Read all sheets
-            df_dict = pd.read_excel(io.BytesIO(file_bytes), sheet_name=None)
-            text = ""
-            for sheet_name, df in df_dict.items():
-                text += f"\n--- Sheet: {sheet_name} ---\n"
-                text += df.to_string() + "\n"
-            return text
+        if filename.endswith('.pdf'):
+            import PyPDF2
+            pdf_reader = PyPDF2.PdfReader(file_stream)
+            for page in pdf_reader.pages: text += page.extract_text() + "\n"
 
-        # C. If it's a Word Doc (.docx)
-        elif filename.lower().endswith('.docx'):
-            doc = docx.Document(io.BytesIO(file_bytes))
-            text = ""
-            for para in doc.paragraphs:
-                text += para.text + "\n"
-            return text
+        elif filename.endswith(('.xlsx', '.xls')):
+            df_dict = pd.read_excel(file_stream, sheet_name=None)
+            for sheet, df in df_dict.items(): text += f"\n--- {sheet} ---\n{df.to_string()}\n"
 
-        # D. Text file
-        elif filename.lower().endswith('.txt'):
-            return file_bytes.decode('utf-8')
+        elif filename.endswith('.docx'):
+            doc = docx.Document(file_stream)
+            for para in doc.paragraphs: text += para.text + "\n"
 
-        return "" # Unsupported format
+        elif filename.endswith('.pptx'): # 📽️ NEW: PowerPoint Support
+            prs = Presentation(file_stream)
+            for slide in prs.slides:
+                for shape in slide.shapes:
+                    if hasattr(shape, "text"): text += shape.text + "\n"
+
+        elif filename.endswith(('.txt', '.md')): # 📝 NEW: Markdown/Text
+            text = file_bytes.decode('utf-8')
+
+        return text
     except Exception as e:
-        print(f"Error extracting text from {filename}: {e}")
+        print(f"Extraction Error: {e}")
         return ""
 
+def create_pdf_from_text(text, filename):
+    """Generates a simple PDF from text string"""
+    buffer = io.BytesIO()
+    p = canvas.Canvas(buffer, pagesize=letter)
+    width, height = letter
+    y = height - 40
+    p.setFont("Helvetica", 12)
+    
+    for line in text.split('\n'):
+        if y < 40:
+            p.showPage()
+            y = height - 40
+        # Simple text wrapping could be added here, but for now strict line break
+        p.drawString(40, y, line[:90]) # Crop long lines to prevent crash
+        y -= 15
+        
+    p.save()
+    buffer.seek(0)
+    return buffer
 # --- 4. APP API ---
 app = FastAPI(title="OpenNotes AI Backend")
 
@@ -112,9 +130,12 @@ async def upload_note(
     file: UploadFile = File(...),
     title: str = Form(...),
     subject: str = Form(...),
-    chapter: str = Form(None),
-    description: str = Form(None),
-    youtube_url: str = Form(None),
+    course: str = Form(""),       # 🆕
+    topic: str = Form(""),        # 🆕
+    tags: str = Form(""),         # 🆕
+    academic_level: str = Form(""), # 🆕
+    description: str = Form(""),
+    youtube_url: str = Form(""),
     uploader_id: str = Form(...)
 ):
     try:
@@ -152,14 +173,17 @@ async def upload_note(
         note_data = {
             "title": title,
             "subject": subject,
-            "chapter": chapter or "",
+            "course": course,               # <--- NEW
+            "topic": topic,                 # <--- NEW
+            "tags": [t.strip() for t in tags.split(',')] if tags else [], # <--- NEW
+            "academic_level": academic_level, # <--- NEW
             "description": description or "",
             "youtube_url": youtube_url or "",
             "fileUrl": g_file.get('webViewLink'),
             "driveId": g_file.get('id'),
             "uploader_id": uploader_id,
             "is_approved": False, 
-            "processed_text": processed_text, # <--- SAVING THE TEXT SO AI CAN READ IT
+            "processed_text": processed_text,
             "created_at": firestore.SERVER_TIMESTAMP
         }
         
@@ -169,6 +193,49 @@ async def upload_note(
 
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+    
+# B. CREATE ONLINE NOTE (New Endpoint)
+class NoteCreateRequest(BaseModel):
+    title: str
+    content: str  # The written text
+    subject: str
+    course: str
+    topic: str
+    tags: str
+    academic_level: str
+    uploader_id: str
+
+
+@app.post("/create-note")
+async def create_online_note(req: NoteCreateRequest):
+    try:
+        # 1. Convert text to PDF so it looks like a "File" in the system
+        safe_filename = f"{uuid.uuid4()}_{req.title}.pdf"
+        pdf_buffer = create_pdf_from_text(req.content, safe_filename)
+        
+        # 2. Upload generated PDF to Drive
+        media = MediaIoBaseUpload(pdf_buffer, mimetype='application/pdf')
+        g_file = drive_service.files().create(
+            body={'name': safe_filename, 'parents': [GOOGLE_DRIVE_FOLDER_ID]},
+            media_body=media, fields='id, webViewLink'
+        ).execute()
+        
+        drive_service.permissions().create(fileId=g_file.get('id'), body={'type': 'anyone', 'role': 'reader'}).execute()
+
+        # 3. Save to DB (Use the raw content for AI)
+        db.collection("notes").add({
+            "title": req.title, "subject": req.subject, "course": req.course, "topic": req.topic,
+            "tags": [t.strip() for t in req.tags.split(',')] if req.tags else [],
+            "academic_level": req.academic_level,
+            "description": "Created using Online Editor", 
+            "fileUrl": g_file.get('webViewLink'), "driveId": g_file.get('id'),
+            "processed_text": req.content, # Direct text!
+            "uploader_id": req.uploader_id,
+            "is_approved": False, "created_at": firestore.SERVER_TIMESTAMP
+        })
+        return {"status": "success"}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))    
 # --- CHAT ENDPOINT ---
 @app.post("/chat")
 async def chat_with_notes(
@@ -287,6 +354,7 @@ async def get_admin_stats():
 
 class SubjectRequest(BaseModel):
     title: str
+    code: str
     field: str  # e.g., "Engineering", "Pharmacy"
     description: str
     uploader_id: str
@@ -297,11 +365,12 @@ async def request_subject(request: SubjectRequest):
         # Check if exists (optional logic could go here)
         new_subject = {
             "title": request.title,
+            "code": request.code, # <--- 🆕 Save it to database
             "field": request.field,
             "description": request.description,
-            "icon": "📚", # Default icon
-            "chapters": [], # Empty list of chapters
-            "is_approved": False, # 🔒 Pending Admin Approval
+            "icon": "📚",
+            "chapters": [],
+            "is_approved": False,
             "uploader_id": request.uploader_id,
             "created_at": firestore.SERVER_TIMESTAMP
         }
@@ -373,6 +442,46 @@ async def get_subscriptions(user_id: str):
         docs = db.collection("users").document(user_id).collection("subscriptions").stream()
         return [{**doc.to_dict(), "id": doc.id} for doc in docs]
     except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+    
+# --- 10. DELETE SUBJECT (CASCADE DELETE) ---
+@app.delete("/subjects/{subject_id}")
+async def delete_subject_cascade(subject_id: str):
+    try:
+        # 1. Get the subject details first (to know its title)
+        sub_ref = db.collection("subjects").document(subject_id)
+        sub_doc = sub_ref.get()
+        
+        if not sub_doc.exists:
+            raise HTTPException(status_code=404, detail="Subject not found")
+            
+        subject_title = sub_doc.to_dict().get("title")
+
+        # 2. Find all notes with this subject title
+        # Note: We batch delete to be efficient
+        notes_query = db.collection("notes").where("subject", "==", subject_title).stream()
+        
+        deleted_count = 0
+        batch = db.batch()
+        
+        for note in notes_query:
+            batch.delete(note.reference)
+            deleted_count += 1
+            # Firestore batches accept up to 500 ops. Simple app likely won't hit this limit instantly, 
+            # but in production, you'd handle pagination. For now, this is safe.
+
+        batch.commit() # Execute all note deletions
+
+        # 3. Finally, delete the Subject itself
+        sub_ref.delete()
+
+        return {
+            "status": "success", 
+            "message": f"Deleted Subject '{subject_title}' and {deleted_count} associated notes."
+        }
+
+    except Exception as e:
+        print(f"Delete Error: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 if __name__ == "__main__":

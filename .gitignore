@@ -27,7 +27,23 @@ backend/client_secret*.json
 Thumbs.db
 .vscode/
 .idea/
+
+
+# --- Uploaded Content (Do not sync) ---
 *.pdf
 *.docx
+*.doc
 *.xlsx
 *.xls
+*.pptx
+*.ppt
+*.txt
+*.md
+
+# --- Images ---
+*.img
+*.png
+*.jpg
+*.jpeg
+*.gif
+*.svg

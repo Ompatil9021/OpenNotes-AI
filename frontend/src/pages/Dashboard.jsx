@@ -1,254 +1,232 @@
-import { useEffect, useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useAuth } from '../context/AuthContext';
-import { getUserNotes, deleteNote, getAdminData, getSubjects, approveItem } from '../services/api';
-import { Trash2, FileText, Video, ShieldAlert, CheckCircle } from 'lucide-react';
+import { getAdminStats, approveItem, deleteNote, getSubjects, deleteSubject } from '../services/api'; // Added getSubjects, deleteSubject
+import { CheckCircle, XCircle, FileText, BookOpen, Trash2, ChevronDown, ChevronUp } from 'lucide-react';
+import { useNavigate } from 'react-router-dom';
 
 const Dashboard = () => {
   const { user, logout } = useAuth();
+  const navigate = useNavigate();
   
   // State
-  const [pendingSubjects, setPendingSubjects] = useState([]);   
-  const [myNotes, setMyNotes] = useState([]);
-  const [adminData, setAdminData] = useState({ total_notes: 0, all_notes: [] });
+  const [stats, setStats] = useState({ total_notes: 0, all_notes: [] });
+  const [subjects, setSubjects] = useState([]); // List of all subjects
   const [loading, setLoading] = useState(true);
-
-  // Check if current user is Admin
-  const isAdmin = user?.role === 'admin';
+  const [expandedSubject, setExpandedSubject] = useState(null); // Which subject is currently open?
 
   useEffect(() => {
-    if (user?.uid) {
-      loadData();
-    }
+    if (user) loadAllData();
   }, [user]);
 
-  const loadData = async () => {
+  const loadAllData = async () => {
     setLoading(true);
-    if (isAdmin) {
-      // 🛡️ Admin: Fetch Everything (Notes)
-      const data = await getAdminData();
-      setAdminData(data);
-
-      // 🛡️ Admin: Fetch Pending Subjects
-      const allSubs = await getSubjects(true); // true = show all (including unapproved)
-      setPendingSubjects(allSubs.filter(s => !s.is_approved));
-    } else {
-      // 🎓 Student: Fetch Only My Notes
-      const notes = await getUserNotes(user.uid);
-      setMyNotes(notes);
-    }
+    const data = await getAdminStats();
+    setStats(data);
+    
+    // Fetch ALL subjects (Pending + Approved)
+    const allSubs = await getSubjects(true);
+    setSubjects(allSubs);
     setLoading(false);
   };
 
-  const handleDelete = async (noteId) => {
-    if (confirm("⚠️ Warning: Are you sure you want to delete this content?")) {
-      const success = await deleteNote(noteId);
-      if (success) {
-        if (isAdmin) {
-          // Update Admin List
-          setAdminData(prev => ({
-            ...prev,
-            all_notes: prev.all_notes.filter(n => n.id !== noteId),
-            total_notes: prev.total_notes - 1
-          }));
-        } else {
-          // Update User List
-          setMyNotes(myNotes.filter(n => n.id !== noteId));
-        }
-      } else {
-        alert("Failed to delete.");
-      }
-    }
-  };
+  // --- ACTIONS ---
 
-  // 🆕 Approve Function
   const handleApprove = async (type, id) => {
-    if(confirm("Approve this item? It will become public.")) {
-      await approveItem(type, id);
-      loadData(); // Refresh the list
+    if (!confirm("Confirm approval?")) return;
+    await approveItem(type, id);
+    loadAllData(); // Refresh
+  };
+
+  const handleReject = async (type, id) => {
+    if (!confirm("Are you sure you want to delete/reject this?")) return;
+    
+    if (type === 'notes') {
+        await deleteNote(id);
+    } else {
+        // If it's a pending subject rejection, we treat it as a delete
+        await deleteSubject(id);
+    }
+    loadAllData();
+  };
+
+  // 💥 NEW: CASCADE DELETE SUBJECT
+  const handleDeleteSubject = async (subject) => {
+    const confirmMsg = `⚠️ WARNING: This will delete the subject "${subject.title}" AND ALL notes inside it.\n\nAre you sure?`;
+    if (!confirm(confirmMsg)) return;
+
+    const result = await deleteSubject(subject.id);
+    if (result) {
+        alert(result.message);
+        loadAllData();
+    } else {
+        alert("Failed to delete subject.");
     }
   };
 
-  const getInitial = () => user?.name ? user.name.charAt(0).toUpperCase() : "U";
+  // Toggle View Notes for a Subject
+  const toggleSubject = (subId) => {
+    if (expandedSubject === subId) setExpandedSubject(null);
+    else setExpandedSubject(subId);
+  };
 
-  // Filter Pending Notes for Admin View
-  const pendingNotes = isAdmin ? adminData.all_notes.filter(n => !n.is_approved) : [];
+  // Filter lists
+  const pendingNotes = stats.all_notes.filter(n => !n.is_approved);
+  const pendingSubjects = subjects.filter(s => !s.is_approved);
+  const approvedSubjects = subjects.filter(s => s.is_approved);
+
+  // Helper to find notes for the expanded subject
+  const notesForExpanded = expandedSubject 
+    ? stats.all_notes.filter(n => n.subject === subjects.find(s => s.id === expandedSubject)?.title)
+    : [];
 
   return (
-    <div style={{ padding: '40px', maxWidth: '1000px', margin: '0 auto', color: 'white' }}>
+    <div style={{ padding: '40px', color: 'white', maxWidth: '1200px', margin: '0 auto' }}>
       
-      {/* 1. Header Section */}
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '40px', background: '#222', padding: '20px', borderRadius: '10px', border: isAdmin ? '1px solid #ff4444' : 'none' }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: '20px' }}>
-          
-          {/* Profile Badge */}
-          <div style={{ 
-            width: '60px', height: '60px', borderRadius: '50%', 
-            background: isAdmin ? '#b91c1c' : 'linear-gradient(135deg, #646cff, #944afb)',
-            display: 'flex', alignItems: 'center', justifyContent: 'center', 
-            fontSize: '28px', fontWeight: 'bold', color: 'white', border: '2px solid #fff'
-          }}>
-            {getInitial()}
-          </div>
-
-          <div>
-            <h2 style={{ margin: 0 }}>
-              {user?.name} {isAdmin && <ShieldAlert size={20} color="red" style={{marginLeft: '10px'}}/>}
-            </h2>
-            <p style={{ margin: 0, color: '#aaa' }}>{user?.email}</p>
-            <span style={{ fontSize: '0.8rem', background: isAdmin ? '#7f1d1d' : '#444', color: isAdmin ? '#fecaca' : 'white', padding: '2px 8px', borderRadius: '4px', marginTop: '5px', display: 'inline-block' }}>
-              {isAdmin ? "System Administrator" : "Student Contributor"}
-            </span>
-          </div>
+      {/* Header */}
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '40px' }}>
+        <h1>🛡️ Admin Dashboard</h1>
+        <div style={{ display: 'flex', gap: '15px' }}>
+            <button onClick={() => navigate('/explore')} style={{ padding: '10px 20px', background: '#333', color: 'white', border: 'none', borderRadius: '5px', cursor: 'pointer' }}>View Site</button>
+            <button onClick={logout} style={{ padding: '10px 20px', background: '#dc2626', color: 'white', border: 'none', borderRadius: '5px', cursor: 'pointer' }}>Logout</button>
         </div>
-        
-        <button onClick={logout} style={{ background: '#ff4444', border: 'none', padding: '10px 20px', color: 'white', borderRadius: '5px', cursor: 'pointer', fontWeight: 'bold' }}>
-          Logout
-        </button>
       </div>
 
-      {/* 2. ADMIN VIEW 🛡️ */}
-      {isAdmin && (
-        <div>
-          <h3 style={{ borderBottom: '1px solid #444', paddingBottom: '10px' }}>🛡️ Admin Control Panel</h3>
-          
-          {/* --- 🆕 SECTION 1: PENDING NOTES (Orange) --- */}
-          {pendingNotes.length > 0 && (
-            <div style={{ marginBottom: '40px', border: '1px solid #f97316', borderRadius: '8px', overflow: 'hidden' }}>
-              <div style={{ background: '#431407', padding: '15px', color: '#fdba74', fontWeight: 'bold', display: 'flex', alignItems: 'center', gap: '10px' }}>
-                📝 Pending Note Uploads ({pendingNotes.length})
-              </div>
-              <table style={{ width: '100%', textAlign: 'left', background: '#1a1a1a', borderCollapse: 'collapse' }}>
-                <tbody>
-                  {pendingNotes.map(note => (
-                    <tr key={note.id} style={{ borderBottom: '1px solid #333' }}>
-                      <td style={{ padding: '15px' }}>
-                        <strong>{note.title}</strong> <br/>
-                        <span style={{ fontSize: '0.8rem', color: '#888' }}>{note.subject}</span>
-                      </td>
-                      <td style={{ padding: '15px' }}>
-                        <a href={note.fileUrl} target="_blank" rel="noreferrer" style={{color: '#4cc9f0', textDecoration:'none'}}>View PDF</a>
-                      </td>
-                      <td style={{ padding: '15px', textAlign: 'right', display: 'flex', gap: '10px', justifyContent: 'flex-end' }}>
-                        <button 
-                          onClick={() => handleApprove('notes', note.id)}
-                          style={{ background: '#10b981', color: 'white', border: 'none', padding: '8px 15px', borderRadius: '4px', cursor: 'pointer', fontWeight: 'bold', display: 'flex', alignItems: 'center', gap: '5px' }}
-                        >
-                          <CheckCircle size={16} /> Approve
-                        </button>
-                        <button 
-                          onClick={() => handleDelete(note.id)}
-                          style={{ background: '#3a0000', color: '#ff4444', border: '1px solid #500', padding: '8px 15px', borderRadius: '4px', cursor: 'pointer', fontWeight: 'bold' }}
-                        >
-                          Reject
-                        </button>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          )}
+      {/* Stats Cards */}
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '20px', marginBottom: '40px' }}>
+        <div className="stat-card">
+          <h3>Total Notes</h3>
+          <p>{stats.total_notes}</p>
+        </div>
+        <div className="stat-card">
+          <h3>Active Subjects</h3>
+          <p>{approvedSubjects.length}</p>
+        </div>
+        <div className="stat-card" style={{ borderColor: pendingNotes.length > 0 ? '#facc15' : '#333' }}>
+          <h3>Pending Uploads</h3>
+          <p>{pendingNotes.length}</p>
+        </div>
+      </div>
 
-          {/* --- SECTION 2: PENDING SUBJECTS (Yellow) --- */}
-          {pendingSubjects.length > 0 && (
-            <div style={{ marginBottom: '40px', border: '1px solid #eab308', borderRadius: '8px', overflow: 'hidden' }}>
-              <div style={{ background: '#422006', padding: '15px', color: '#fca5a5', fontWeight: 'bold', display: 'flex', alignItems: 'center', gap: '10px' }}>
-                ⚠️ Pending Subject Requests ({pendingSubjects.length})
-              </div>
-              <table style={{ width: '100%', textAlign: 'left', background: '#1a1a1a', borderCollapse: 'collapse' }}>
-                <tbody>
-                  {pendingSubjects.map(sub => (
-                    <tr key={sub.id} style={{ borderBottom: '1px solid #333' }}>
-                      <td style={{ padding: '15px' }}>
-                        <strong>{sub.title}</strong> <br/>
-                        <span style={{ fontSize: '0.8rem', color: '#888' }}>{sub.field}</span>
-                      </td>
-                      <td style={{ padding: '15px' }}>{sub.description}</td>
-                      <td style={{ padding: '15px', textAlign: 'right' }}>
-                        <button 
-                          onClick={() => handleApprove('subjects', sub.id)}
-                          style={{ background: '#10b981', color: 'white', border: 'none', padding: '8px 15px', borderRadius: '4px', cursor: 'pointer', fontWeight: 'bold', display: 'flex', alignItems: 'center', gap: '5px' }}
-                        >
-                          <CheckCircle size={16} /> Approve
-                        </button>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          )}
+      {/* --- PENDING APPROVALS SECTION --- */}
+      {(pendingNotes.length > 0 || pendingSubjects.length > 0) && (
+        <div style={{ marginBottom: '50px' }}>
+            <h2 style={{ color: '#facc15' }}>⚠️ Pending Approvals</h2>
+            
+            {/* Pending Notes */}
+            {pendingNotes.map(note => (
+                <div key={note.id} className="approval-card">
+                    <div>
+                        <strong>📄 {note.title}</strong>
+                        <div style={{ fontSize: '0.8rem', color: '#aaa' }}>{note.subject} • by {note.uploader_id}</div>
+                        <a href={note.fileUrl} target="_blank" rel="noreferrer" style={{ color: '#646cff', fontSize: '0.8rem' }}>View File</a>
+                    </div>
+                    <div className="actions">
+                        <button onClick={() => handleApprove('notes', note.id)} className="btn-approve"><CheckCircle size={18}/></button>
+                        <button onClick={() => handleReject('notes', note.id)} className="btn-reject"><XCircle size={18}/></button>
+                    </div>
+                </div>
+            ))}
 
-          {/* --- Stats --- */}
-          <div style={{ display: 'flex', gap: '20px', marginBottom: '30px' }}>
-             <div style={{ background: '#333', padding: '20px', borderRadius: '8px', flex: 1, textAlign: 'center' }}>
-               <h2 style={{ margin: 0, color: '#4cc9f0' }}>{adminData.total_notes}</h2>
-               <p style={{ margin: 0, color: '#ccc' }}>Total Notes on Platform</p>
-             </div>
-             <div style={{ background: '#333', padding: '20px', borderRadius: '8px', flex: 1, textAlign: 'center' }}>
-                <h2 style={{ margin: 0, color: '#f0ad4e' }}>Active</h2>
-                <p style={{ margin: 0, color: '#ccc' }}>System Status</p>
-             </div>
-          </div>
-
-          <h4>All User Uploads:</h4>
-          {loading ? <p>Scanning database...</p> : (
-            <Table notes={adminData.all_notes} handleDelete={handleDelete} isAdmin={true} />
-          )}
+            {/* Pending Subjects */}
+            {pendingSubjects.map(sub => (
+                <div key={sub.id} className="approval-card">
+                    <div>
+                        <strong>📚 New Subject: {sub.title} ({sub.code})</strong>
+                        <div style={{ fontSize: '0.8rem', color: '#aaa' }}>Field: {sub.field}</div>
+                        <div style={{ fontSize: '0.8rem', color: '#888' }}>"{sub.description}"</div>
+                    </div>
+                    <div className="actions">
+                        <button onClick={() => handleApprove('subjects', sub.id)} className="btn-approve"><CheckCircle size={18}/></button>
+                        <button onClick={() => handleReject('subjects', sub.id)} className="btn-reject"><XCircle size={18}/></button>
+                    </div>
+                </div>
+            ))}
         </div>
       )}
 
-      {/* 3. STUDENT VIEW 🎓 */}
-      {!isAdmin && (
-        <div>
-          <h3>📂 My Contributions ({myNotes.length})</h3>
-          {loading ? <p>Loading your notes...</p> : (
-            <Table notes={myNotes} handleDelete={handleDelete} isAdmin={false} />
-          )}
+      {/* --- CONTENT MANAGEMENT SECTION --- */}
+      <div>
+        <h2>🗂️ Manage Content</h2>
+        <p style={{ color: '#aaa', marginBottom: '20px' }}>Expand a subject to view its notes or delete the entire subject.</p>
+
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '15px' }}>
+            {approvedSubjects.map(sub => (
+                <div key={sub.id} style={{ background: '#1a1a1a', borderRadius: '8px', border: '1px solid #333', overflow: 'hidden' }}>
+                    
+                    {/* Subject Header Row */}
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '15px 20px', background: '#222' }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '15px' }}>
+                            <span style={{ fontSize: '1.5rem' }}>{sub.icon || "📚"}</span>
+                            <div>
+                                <div style={{ fontWeight: 'bold', fontSize: '1.1rem' }}>{sub.title} <span style={{color:'#666', fontSize:'0.9rem'}}>({sub.code})</span></div>
+                                <div style={{ fontSize: '0.8rem', color: '#aaa' }}>{sub.field}</div>
+                            </div>
+                        </div>
+                        
+                        <div style={{ display: 'flex', gap: '15px', alignItems: 'center' }}>
+                            <button 
+                                onClick={() => toggleSubject(sub.id)}
+                                style={{ background: 'transparent', border: 'none', color: '#ccc', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '5px' }}
+                            >
+                                {expandedSubject === sub.id ? "Hide Notes" : "View Notes"} 
+                                {expandedSubject === sub.id ? <ChevronUp size={16}/> : <ChevronDown size={16}/>}
+                            </button>
+                            
+                            <button 
+                                onClick={() => handleDeleteSubject(sub)}
+                                style={{ background: '#dc2626', color: 'white', border: 'none', padding: '8px 12px', borderRadius: '5px', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '5px' }}
+                            >
+                                <Trash2 size={16}/> Delete Subject
+                            </button>
+                        </div>
+                    </div>
+
+                    {/* Expanded Notes List */}
+                    {expandedSubject === sub.id && (
+                        <div style={{ padding: '20px', borderTop: '1px solid #333', background: '#111' }}>
+                            <h4 style={{ marginTop: 0, color: '#666' }}>Notes in {sub.title}:</h4>
+                            
+                            {notesForExpanded.length === 0 ? (
+                                <p style={{ color: '#444', fontStyle: 'italic' }}>No notes found in this subject.</p>
+                            ) : (
+                                <div style={{ display: 'grid', gap: '10px' }}>
+                                    {notesForExpanded.map(note => (
+                                        <div key={note.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '10px', background: '#222', borderRadius: '4px', border: '1px solid #333' }}>
+                                            <div style={{ display: 'flex', gap: '10px', alignItems: 'center' }}>
+                                                <FileText size={16} color="#646cff" />
+                                                <span>{note.title}</span>
+                                                <span style={{ fontSize: '0.8rem', color: '#666', background: '#111', padding: '2px 6px', borderRadius: '4px' }}>{note.topic || "General"}</span>
+                                            </div>
+                                            <button 
+                                                onClick={() => handleReject('notes', note.id)} 
+                                                style={{ color: '#ef4444', background: 'transparent', border: 'none', cursor: 'pointer' }}
+                                                title="Delete Note"
+                                            >
+                                                <Trash2 size={16}/>
+                                            </button>
+                                        </div>
+                                    ))}
+                                </div>
+                            )}
+                        </div>
+                    )}
+
+                </div>
+            ))}
         </div>
-      )}
+      </div>
 
-    </div>
-  );
-};
+      <style>{`
+        .stat-card { background: #1a1a1a; padding: 20px; borderRadius: 10px; border: 1px solid #333; textAlign: center; }
+        .stat-card h3 { margin: 0 0 10px 0; color: #aaa; font-size: 1rem; }
+        .stat-card p { margin: 0; font-size: 2rem; font-weight: bold; }
+        
+        .approval-card { display: flex; justifyContent: space-between; alignItems: center; background: #222; padding: 15px; margin-bottom: 10px; borderRadius: 8px; border-left: 4px solid #facc15; }
+        .actions { display: flex; gap: 10px; }
+        .btn-approve { background: #10b981; color: white; border: none; padding: 8px; borderRadius: 5px; cursor: pointer; }
+        .btn-reject { background: #ef4444; color: white; border: none; padding: 8px; borderRadius: 5px; cursor: pointer; }
+      `}</style>
 
-// 🛠️ Reusable Table Component
-const Table = ({ notes, handleDelete, isAdmin }) => {
-  if (notes.length === 0) return <p style={{ color: '#666', fontStyle: 'italic' }}>No records found.</p>;
-
-  return (
-    <div style={{ overflowX: 'auto', borderRadius: '8px', border: '1px solid #333' }}>
-      <table style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'left', background: '#1a1a1a' }}>
-        <thead>
-          <tr style={{ background: '#333', color: '#ccc' }}>
-            <th style={{ padding: '15px' }}>Title</th>
-            <th style={{ padding: '15px' }}>Subject</th>
-            {isAdmin && <th style={{ padding: '15px' }}>Uploader ID</th>}
-            <th style={{ padding: '15px' }}>Type</th>
-            <th style={{ padding: '15px' }}>Action</th>
-          </tr>
-        </thead>
-        <tbody>
-          {notes.map(note => (
-            <tr key={note.id} style={{ borderBottom: '1px solid #333' }}>
-              <td style={{ padding: '15px', fontWeight: 'bold' }}>{note.title}</td>
-              <td style={{ padding: '15px' }}>{note.subject}</td>
-              {isAdmin && <td style={{ padding: '15px', fontSize: '0.8rem', color: '#888' }}>{note.uploader_id?.substring(0, 8)}...</td>}
-              <td style={{ padding: '15px' }}>
-                 {note.youtube_url ? <Video size={16} color="orange"/> : <FileText size={16} color="#4cc9f0"/>}
-              </td>
-              <td style={{ padding: '15px' }}>
-                <button 
-                  onClick={() => handleDelete(note.id)} 
-                  style={{ background: '#3a0000', color: '#ff4444', border: '1px solid #500', padding: '5px 10px', borderRadius: '4px', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '5px', fontSize: '0.8rem' }}
-                >
-                  <Trash2 size={14} /> Delete
-                </button>
-              </td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
     </div>
   );
 };

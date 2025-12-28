@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import { useAuth } from '../context/AuthContext';
 import { getSubjects, getMySubscriptions, subscribeToSubject } from '../services/api';
-import { Search, Plus, BookOpen, CheckCircle, ArrowRight } from 'lucide-react';
+import { Search, Plus, BookOpen, CheckCircle, ArrowRight, Tag, GraduationCap, Hash } from 'lucide-react';
 import { Link, useNavigate } from 'react-router-dom';
 
 // Firestore for fetching notes
@@ -30,15 +30,24 @@ const Explore = () => {
     }
   }, [user]);
 
-  const loadData = async () => {
+const loadData = async () => {
     setLoading(true);
-    // 1. Get User's Personal List
-    const subs = await getMySubscriptions(user.uid);
-    setMySubjects(subs);
 
-    // 2. Get All Available Subjects (for search later)
+    // 1. Get All Real, Approved Subjects (The "Master List")
     const all = await getSubjects(false); 
     setAllSubjects(all);
+
+    // 2. Get User's Personal Subscriptions
+    const subs = await getMySubscriptions(user.uid);
+
+    // 3. 👇 SMART FIX: Filter out "Ghost" Subjects
+    // Only keep subscriptions that actually exist in the 'all' list.
+    // If you deleted a subject as Admin, 'all' won't have it, so this code removes it from the view.
+    const validSubs = subs.filter(userSub => 
+        all.some(realSub => realSub.id === userSub.id)
+    );
+
+    setMySubjects(validSubs);
     setLoading(false);
   };
 
@@ -51,7 +60,8 @@ const Explore = () => {
     } else {
       const filtered = allSubjects.filter(sub => 
         sub.title.toLowerCase().includes(term) || 
-        sub.field.toLowerCase().includes(term)
+        sub.field.toLowerCase().includes(term) ||
+        (sub.code && sub.code.toLowerCase().includes(term))
       );
       setSearchResults(filtered);
     }
@@ -91,7 +101,7 @@ const Explore = () => {
           <p style={{ color: '#aaa' }}>Select a subject to view notes.</p>
         </div>
         
-        {!isAdding && (
+        {!selectedSubject && !isAdding && (
           <button 
             onClick={() => setIsAdding(true)}
             style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '10px 20px', background: '#646cff', color: 'white', border: 'none', borderRadius: '30px', cursor: 'pointer', fontWeight: 'bold' }}
@@ -178,39 +188,76 @@ const Explore = () => {
           
           <div className="list-container">
             {notes.length === 0 ? <p style={{ color: '#666' }}>No notes found for this subject yet.</p> : notes.map((note) => (
-              <div key={note.id} className="list-item">
-                <div style={{ flex: 1 }}>
-                   <div style={{ fontWeight: 'bold', fontSize: '1.1rem' }}>{note.title}</div>
-                   <div style={{ color: '#888', fontSize: '0.9rem' }}>{note.chapter || "General"} • {note.description}</div>
-                </div>
+              <div key={note.id} className="list-item" style={{ flexDirection: 'column', alignItems: 'flex-start', gap: '15px' }}>
                 
-                {/* 👇 UPDATED BUTTON LOGIC HERE */}
-                {note.fileUrl ? (
-                  <Link 
-                    to="/study" 
-                    state={{ fileUrl: note.fileUrl, noteId: note.id, subject: note.subject }}
-                    style={{ textDecoration: 'none' }}
-                  >
-                    <button style={{ 
-                      padding: '10px 25px', 
-                      background: 'linear-gradient(135deg, #646cff, #944afb)', 
-                      color: 'white', 
-                      border: 'none', 
-                      borderRadius: '30px', 
-                      cursor: 'pointer',
-                      fontWeight: 'bold',
-                      display: 'flex',
-                      alignItems: 'center',
-                      gap: '8px',
-                      transition: 'transform 0.2s'
-                    }}>
-                      Enter Study Room <ArrowRight size={16}/>
-                    </button>
-                  </Link>
-                ) : (
-                  <button disabled style={{ padding: '8px 20px', background: '#333', color: '#666', border: 'none', borderRadius: '30px', cursor: 'not-allowed' }}>
-                    No PDF Available
-                  </button>
+                {/* 1. Header Row (Title & Button) */}
+                <div style={{ display: 'flex', justifyContent: 'space-between', width: '100%', alignItems: 'center' }}>
+                    <div style={{ fontWeight: 'bold', fontSize: '1.2rem' }}>{note.title}</div>
+                    
+                    {note.fileUrl ? (
+                      <Link 
+                        to="/study" 
+                        state={{ fileUrl: note.fileUrl, noteId: note.id, subject: note.subject }}
+                        style={{ textDecoration: 'none' }}
+                      >
+                        <button style={{ 
+                          padding: '8px 20px', 
+                          background: 'linear-gradient(135deg, #646cff, #944afb)', 
+                          color: 'white', 
+                          border: 'none', 
+                          borderRadius: '20px', 
+                          cursor: 'pointer',
+                          fontWeight: 'bold',
+                          display: 'flex',
+                          alignItems: 'center',
+                          gap: '8px'
+                        }}>
+                          Enter Study Room <ArrowRight size={16}/>
+                        </button>
+                      </Link>
+                    ) : (
+                      <button disabled style={{ padding: '8px 20px', background: '#333', color: '#666', border: 'none', borderRadius: '30px', cursor: 'not-allowed' }}>
+                        No File
+                      </button>
+                    )}
+                </div>
+
+                {/* 2. Metadata Row (Course | Topic | Level) */}
+                <div style={{ display: 'flex', gap: '15px', fontSize: '0.9rem', color: '#aaa', flexWrap: 'wrap' }}>
+                    {note.course && (
+                        <span style={{ display: 'flex', alignItems: 'center', gap: '5px', background: '#222', padding: '4px 8px', borderRadius: '4px' }}>
+                            <BookOpen size={14}/> {note.course}
+                        </span>
+                    )}
+                    {/* Fallback to 'chapter' if 'topic' is missing (for old notes) */}
+                    {(note.topic || note.chapter) && (
+                        <span style={{ display: 'flex', alignItems: 'center', gap: '5px', background: '#222', padding: '4px 8px', borderRadius: '4px' }}>
+                            <Hash size={14}/> {note.topic || note.chapter}
+                        </span>
+                    )}
+                    {note.academic_level && (
+                        <span style={{ display: 'flex', alignItems: 'center', gap: '5px', background: '#222', padding: '4px 8px', borderRadius: '4px' }}>
+                            <GraduationCap size={14}/> {note.academic_level}
+                        </span>
+                    )}
+                </div>
+
+                {/* 3. Description */}
+                {note.description && (
+                    <div style={{ color: '#ccc', fontSize: '0.95rem', fontStyle: 'italic' }}>
+                        "{note.description}"
+                    </div>
+                )}
+
+                {/* 4. Tags Row */}
+                {note.tags && note.tags.length > 0 && (
+                    <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+                        {note.tags.map((tag, idx) => (
+                            <span key={idx} style={{ fontSize: '0.8rem', color: '#646cff', background: 'rgba(100, 108, 255, 0.1)', padding: '2px 8px', borderRadius: '10px' }}>
+                                #{tag}
+                            </span>
+                        ))}
+                    </div>
                 )}
 
               </div>
