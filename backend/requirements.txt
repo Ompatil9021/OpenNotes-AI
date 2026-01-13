@@ -1,27 +1,43 @@
-numpy==1.26.2
-fastapi==0.111.1
+# Web Framework & Server
+fastapi==0.111.2
 uvicorn==0.23.2
-pandas==2.0.3
-cachetools==6.2.4
-certifi==2025.11.12
-charset-normalizer==3.4.4
-google-api-core==2.28.1
+
+# Data Processing
+numpy==1.26.2
+pandas==2.2.2
+
+# File Generation & Processing
+python-docx==0.8.12
+python-pptx==0.6.21
+reportlab==4.1.2
+PyPDF2==3.2.0
+
+# Google & Firebase Services
+firebase-admin==6.3.0
 google-api-python-client==2.187.0
+google-api-core==2.28.1
 google-auth==2.41.1
 google-auth-httplib2==0.3.0
 google-auth-oauthlib==1.2.3
 googleapis-common-protos==1.72.0
-httplib2==0.31.0
-idna==3.11
-oauthlib==3.3.1
-proto-plus==1.27.0
-protobuf==6.33.2
-pyasn1==0.6.1
-pyasn1_modules==0.4.2
-pyparsing==3.3.1
-python-dotenv==1.2.1
+
+# Authentication & Networking
 requests==2.32.5
 requests-oauthlib==2.0.0
+urllib3==2.6.2
+httplib2==0.31.0
+oauthlib==3.3.1
+certifi==2025.11.12
+charset-normalizer==3.4.4
+idna==3.11
+
+# Infrastructure & Utilities
+python-dotenv==1.2.1
+cachetools==6.2.4
+protobuf==6.33.2
+proto-plus==1.27.0
+pyasn1==0.6.1
+pyasn1-modules==0.4.2
+pyparsing==3.3.1
 rsa==4.9.1
 uritemplate==4.2.0
-urllib3==2.6.2
