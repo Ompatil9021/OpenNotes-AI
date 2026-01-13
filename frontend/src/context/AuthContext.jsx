@@ -13,7 +13,7 @@ export const AuthProvider = ({ children }) => {
     const unsubscribe = onAuthStateChanged(auth, (currentUser) => {
       if (currentUser) {
         // Check if it's the specific Admin Email
-        const isAdmin = currentUser.email === "ompatil@gmail.com"; // CHANGE THIS to your desired admin email
+        const isAdmin = currentUser.email === "ompatil902123@gmail.com"; // CHANGE THIS to your desired admin email
         
         setUser({
           uid: currentUser.uid,
