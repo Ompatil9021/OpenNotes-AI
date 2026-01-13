@@ -483,6 +483,6 @@ async def delete_subject_cascade(subject_id: str):
     except Exception as e:
         print(f"Delete Error: {e}")
         raise HTTPException(status_code=500, detail=str(e))
-
 if __name__ == "__main__":
-    uvicorn.run("main:app", host="127.0.0.1", port=8000, reload=True)
+    port = int(os.environ.get("PORT", 5000))  # get port from environment, default 5000
+    uvicorn.run("main:app", host="0.0.0.0", port=port)
